@@ -2,3 +2,4 @@ requests
 pandas
 flask
 tvdatafeed @ https://github.com/rongardF/tvdatafeed/archive/refs/heads/main.zip
+psycopg2-binary==2.9.9
