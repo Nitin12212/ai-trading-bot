@@ -1,10 +1,10 @@
 import requests
 import time
 import pandas as pd
-import sqlite3
 import os
 import logging
 import random
+import psycopg2 # NEW: Cloud Database Library
 from datetime import datetime, timedelta, time as dt_time
 from threading import Thread, Lock
 from tvDatafeed import TvDatafeed, Interval
@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
+DB_URL = os.getenv("DATABASE_URL") # NEW: Cloud Database Link
 
 try:
     AUTHORIZED_USER = int(os.getenv("AUTHORIZED_USER", "0"))
@@ -25,6 +26,8 @@ except:
 
 if AUTHORIZED_USER == 0:
     logging.error("🚨 CRITICAL: AUTHORIZED_USER not set! Bot will reject commands.")
+if not DB_URL:
+    logging.error("🚨 CRITICAL: DATABASE_URL not set! Cloud DB will not work.")
 
 scan_lock = Lock()
 db_lock = Lock()
@@ -52,8 +55,8 @@ HTML_TEMPLATE = """
     <div class="max-w-md mx-auto">
         <div class="flex justify-between items-center mb-6">
             <div>
-                <h1 class="text-2xl font-bold text-emerald-400">V16.0 Holy Grail</h1>
-                <p class="text-xs text-slate-400">Live Algo Performance</p>
+                <h1 class="text-2xl font-bold text-emerald-400">V17.0 Immortal Engine</h1>
+                <p class="text-xs text-slate-400">Cloud AI Performance</p>
             </div>
             <div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">
                 ● ACTIVE
@@ -199,12 +202,10 @@ def api_stats():
     pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'") or 0.0
     total = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status!='OPEN'") or 0)
     wins = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status='PROFIT ✅'") or 0)
-    # Passed partial_exit and qty to UI
     open_trades = execute_db("SELECT symbol, type, entry_price, mode, sl, partial_exit, qty FROM pro_trades WHERE status='OPEN'", fetchall=True) or []
     win_rate = (wins / total * 100) if total > 0 else 0
     return jsonify({"pnl": pnl, "win_rate": win_rate, "total_trades": total, "open_trades": open_trades, "mode": trading_mode, "paused": bot_paused})
 
-# BUG FIX 1: Sort by Timestamp (date_ts) to fix Equity Curve Order
 @app.route('/api/equity')
 def api_equity():
     data = execute_db("SELECT date, pnl FROM pro_trades WHERE status!='OPEN' ORDER BY date_ts ASC", fetchall=True) or []
@@ -222,7 +223,7 @@ alerts_muted = False
 current_risk_percent = 2.0
 daily_loss_limit = -2000.0
 daily_profit_target = 3000.0
-global_drawdown_limit = -5000.0 # BUG FIX 5: Maximum Drawdown Safety
+global_drawdown_limit = -5000.0 
 max_daily_trades = 5          
 trade_cooldown_seconds = 300  
 last_trade_time = {}          
@@ -239,39 +240,38 @@ def get_tv():
 tv = get_tv()
 
 # ==========================================
-# 🗄️ 3. SAFE DATABASE ENGINE & MIGRATION
+# 🗄️ 3. CLOUD POSTGRESQL ENGINE (IMMORTAL)
 # ==========================================
 def execute_db(query, params=(), fetch=False, fetchall=False):
+    if not DB_URL: return None
     with db_lock:
+        conn = None
         try:
-            conn = sqlite3.connect('trades.db', timeout=20, check_same_thread=False)
+            conn = psycopg2.connect(DB_URL)
             c = conn.cursor()
             c.execute(query, params)
             if fetch: res = c.fetchone()
             elif fetchall: res = c.fetchall()
             else: conn.commit(); res = True
-            conn.close()
+            c.close()
             return res
         except Exception as e:
-            logging.error(f"DB Error: {e}")
+            logging.error(f"Cloud DB Error: {e}")
+            if conn: conn.rollback()
             return None
+        finally:
+            if conn: conn.close()
 
 def get_val(query, params=()):
     res = execute_db(query, params, fetch=True)
     return res[0] if res and res[0] else 0.0
 
 def setup_db():
+    # PostgreSQL syntax for Cloud Persistence
     execute_db('''CREATE TABLE IF NOT EXISTS pro_trades 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, date_ts INTEGER, symbol TEXT, type TEXT, 
-                  entry_price REAL, sl REAL, tp REAL, status TEXT, pnl REAL, mode TEXT, partial_exit INTEGER DEFAULT 0, qty INTEGER DEFAULT 0)''')
-    
-    # Safe DB Upgrade if table exists without new columns
-    try: execute_db("ALTER TABLE pro_trades ADD COLUMN date_ts INTEGER")
-    except: pass
-    try: execute_db("ALTER TABLE pro_trades ADD COLUMN partial_exit INTEGER DEFAULT 0")
-    except: pass
-    try: execute_db("ALTER TABLE pro_trades ADD COLUMN qty INTEGER DEFAULT 0")
-    except: pass
+                 (id SERIAL PRIMARY KEY, date TEXT, date_ts INTEGER, symbol TEXT, type TEXT, 
+                  entry_price REAL, sl REAL, tp REAL, status TEXT, pnl REAL, mode TEXT, 
+                  partial_exit INTEGER DEFAULT 0, qty INTEGER DEFAULT 0)''')
 
 def get_ist(): return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
@@ -327,10 +327,9 @@ def run_scan_cycle(manual=False):
         return "SKIP" 
             
     total_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
-    today_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{today}%",))
-    trades_today = get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE ?", (f"{today}%",))
+    today_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE %s AND status!='OPEN'", (f"{today}%",))
+    trades_today = get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE %s", (f"{today}%",))
     
-    # BUG FIX 5: Global Drawdown Protection
     if total_pnl <= global_drawdown_limit:
         if manual: send_msg(AUTHORIZED_USER, "🚨 MAX DRAWDOWN HIT. BOT STOPPED.")
         return "PAUSE"
@@ -375,7 +374,7 @@ def run_scan_cycle(manual=False):
             macd, macd_sig = calc_macd(data_5m)
             if len(macd) < 2 or len(macd_sig) < 2: continue
             
-            open_trades = execute_db("SELECT id, type, entry_price, sl, tp, pnl, partial_exit, qty FROM pro_trades WHERE symbol=? AND status='OPEN'", (sym,), fetchall=True)
+            open_trades = execute_db("SELECT id, type, entry_price, sl, tp, pnl, partial_exit, qty FROM pro_trades WHERE symbol=%s AND status='OPEN'", (sym,), fetchall=True)
             if open_trades:
                 for t in open_trades:
                     t_id, t_type, entry, sl, tp, current_pnl, partial_exit, qty = t
@@ -383,27 +382,24 @@ def run_scan_cycle(manual=False):
                     
                     pts_captured = (cp - entry) if "BUY" in t_type else (entry - cp)
                     
-                    # BUG FIX 3: 50% PARTIAL SCALING LOGIC
                     half_target = entry + (tp - entry)/2 if "BUY" in t_type else entry - (entry - tp)/2
                     is_half_hit = (cp >= half_target) if "BUY" in t_type else (cp <= half_target)
                     
                     if not partial_exit and is_half_hit:
                         locked_pnl = pts_captured * (qty / 2)
-                        execute_db("UPDATE pro_trades SET partial_exit=1, pnl=?, sl=? WHERE id=?", (locked_pnl, entry, t_id))
-                        sl = entry # Update local SL
+                        execute_db("UPDATE pro_trades SET partial_exit=1, pnl=%s, sl=%s WHERE id=%s", (locked_pnl, entry, t_id))
+                        sl = entry 
                         if not alerts_muted: send_msg(AUTHORIZED_USER, f"🎯 *PARTIAL BOOKED (50%)*: {sym}\n💰 Locked: ₹{locked_pnl:.2f}\n🛡️ SL moved to Entry.")
-                        continue # Continue trade with remaining qty
+                        continue 
 
-                    # Trailing SL (Locks more profit if price moves further)
                     if t_type == "BUY 🟢" and cp > entry:
                         new_sl = max(sl, cp - (cp * 0.001))
-                        if new_sl > sl: execute_db("UPDATE pro_trades SET sl=? WHERE id=?", (new_sl, t_id)); sl = new_sl
+                        if new_sl > sl: execute_db("UPDATE pro_trades SET sl=%s WHERE id=%s", (new_sl, t_id)); sl = new_sl
                             
                     elif t_type == "SELL 🔴" and cp < entry:
                         new_sl = min(sl, cp + (cp * 0.001))
-                        if new_sl < sl: execute_db("UPDATE pro_trades SET sl=? WHERE id=?", (new_sl, t_id)); sl = new_sl
+                        if new_sl < sl: execute_db("UPDATE pro_trades SET sl=%s WHERE id=%s", (new_sl, t_id)); sl = new_sl
 
-                    # Final Exit Condition
                     remaining_qty = (qty / 2) if partial_exit else qty
                     if t_type == "BUY 🟢":
                         if cp >= tp: status, pnl, msg = "PROFIT ✅", current_pnl + (abs(tp - entry) * remaining_qty), f"🎯 TARGET HIT: {sym} (+₹{(abs(tp - entry) * remaining_qty):.2f})"
@@ -413,7 +409,7 @@ def run_scan_cycle(manual=False):
                         elif cp >= sl: status, pnl, msg = "LOSS ❌", current_pnl - (abs(sl - entry) * remaining_qty), f"🛑 SL HIT: {sym} (Exit: ₹{cp:.2f})"
                     
                     if status != "OPEN":
-                        execute_db("UPDATE pro_trades SET status=?, pnl=? WHERE id=?", (status, pnl, t_id))
+                        execute_db("UPDATE pro_trades SET status=%s, pnl=%s WHERE id=%s", (status, pnl, t_id))
                         if not alerts_muted: send_msg(AUTHORIZED_USER, msg)
                 continue 
             
@@ -432,7 +428,6 @@ def run_scan_cycle(manual=False):
             last_signal[sym] = decision
 
             if decision != "WAIT":
-                # BUG FIX 4: SLIPPAGE SIMULATION (0.05%)
                 slippage = cp * 0.0005
                 exec_price = cp + slippage if "BUY" in decision else cp - slippage
                 
@@ -450,7 +445,7 @@ def run_scan_cycle(manual=False):
                 
                 if order_success:
                     ts = int(time.time())
-                    execute_db('INSERT INTO pro_trades (date, date_ts, symbol, type, entry_price, sl, tp, status, pnl, mode, qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    execute_db('INSERT INTO pro_trades (date, date_ts, symbol, type, entry_price, sl, tp, status, pnl, mode, qty) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
                                (get_ist().strftime("%Y-%m-%d %H:%M"), ts, sym, decision, exec_price, sl, tp, "OPEN", 0.0, trading_mode, qty))
                     last_trade_time[sym] = time.time()
                     
@@ -518,10 +513,8 @@ def telegram():
             url = f"{BASE_URL}/getUpdates?timeout=5"
             if last_id: url += f"&offset={last_id + 1}"
             
-            try:
-                res = requests.get(url, timeout=10).json()
-            except:
-                time.sleep(2); continue
+            try: res = requests.get(url, timeout=10).json()
+            except: time.sleep(2); continue
             
             if "result" in res:
                 for upd in res["result"]:
@@ -533,7 +526,7 @@ def telegram():
                         if chat_id != AUTHORIZED_USER:
                             send_msg(chat_id, "❌ *UNAUTHORIZED ACCESS.*"); continue
                             
-                        if txt == "/start": send_msg(chat_id, "💎 V16.0 HOLY GRAIL Online. Scaled Exits & Slippage Active.")
+                        if txt == "/start": send_msg(chat_id, "💎 V17.0 IMMORTAL ENGINE Online. Cloud DB Connected.")
                         
                         elif txt == "🌐 Open Dashboard":
                             dash_url = "https://ai-trading-bot-itc0.onrender.com"
@@ -576,7 +569,7 @@ def telegram():
                                 send_msg(chat_id, msg)
                         elif txt in ["📅 Today Report", "/today"]:
                             t = get_ist().strftime("%Y-%m-%d")
-                            pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{t}%",))
+                            pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE %s AND status!='OPEN'", (f"{t}%",))
                             send_msg(chat_id, f"📅 *Today's PnL:* ₹{pnl:.2f}")
                         elif txt == "🔍 Scan Now":
                             Thread(target=manual_scan_wrapper).start()
@@ -585,7 +578,7 @@ def telegram():
                         elif txt in ["❌ Close All", "/closeall"]:
                             rows = execute_db("SELECT id, symbol, type, entry_price FROM pro_trades WHERE status='OPEN'", fetchall=True)
                             if rows:
-                                for r in rows: execute_db("UPDATE pro_trades SET status='CLOSED ⚠️' WHERE id=?", (r[0],))
+                                for r in rows: execute_db("UPDATE pro_trades SET status='CLOSED ⚠️' WHERE id=%s", (r[0],))
                                 send_msg(chat_id, "⚠️ All positions FORCE CLOSED.")
                             else: send_msg(chat_id, "❌ No open trades.")
                         elif txt in ["⏸ Pause Bot", "/pause"]: bot_paused = True; send_msg(chat_id, "🛑 Bot Paused.")
