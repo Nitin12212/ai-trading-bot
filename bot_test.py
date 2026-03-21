@@ -4,7 +4,6 @@ import pandas as pd
 import sqlite3
 import os
 import logging
-import json
 from datetime import datetime, timedelta
 from threading import Thread
 from tvDatafeed import TvDatafeed, Interval
@@ -20,7 +19,7 @@ BASE_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "👑 V4.0 GOD MODE AI Trading Bot is LIVE!"
+def home(): return "👑 V5.0 ULTIMATE TERMINAL is LIVE!"
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -29,7 +28,8 @@ def run_server():
 # GLOBAL SETTINGS
 bot_paused = False
 alerts_muted = False
-current_risk_percent = 2.0 # Default 2% risk
+strategy_mode = "SAFE" # Options: SAFE, AGGRESSIVE
+current_risk_percent = 2.0 
 my_chat_id = None 
 last_trade_signals = {"NIFTY": "WAIT", "BANKNIFTY": "WAIT", "CNXFINANCE": "WAIT"}
 tv = TvDatafeed() 
@@ -50,7 +50,7 @@ def get_ist_time():
     return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 # ==========================================
-# 📱 TELEGRAM UI & MESSAGING
+# 📱 TELEGRAM UI (ULTIMATE KEYBOARD)
 # ==========================================
 def send_msg(chat_id, text, show_buttons=True):
     if not TOKEN: return
@@ -58,12 +58,13 @@ def send_msg(chat_id, text, show_buttons=True):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     
     if show_buttons:
-        # 🔥 THE ULTIMATE PRO KEYBOARD
         keyboard = {
             "keyboard": [
                 [{"text": "📊 Check Status"}, {"text": "📜 Show History"}],
                 [{"text": "💰 View PnL"}, {"text": "📊 Win Rate"}],
                 [{"text": "📂 Open Trades"}, {"text": "📉 Market Trend"}],
+                [{"text": "📅 Today Report"}, {"text": "📉 Drawdown"}],
+                [{"text": "🔕 Mute Alerts"}, {"text": "🔔 Unmute Alerts"}],
                 [{"text": "⏸ Pause Bot"}, {"text": "▶️ Resume Bot"}],
                 [{"text": "⚙️ Set Risk"}, {"text": "❌ Close All"}]
             ],
@@ -73,7 +74,7 @@ def send_msg(chat_id, text, show_buttons=True):
     requests.post(url, json=payload)
 
 # ==========================================
-# 🛡️ TRADE MANAGEMENT & EMERGENCY
+# 🛡️ TRADE MANAGEMENT
 # ==========================================
 def emergency_close_all():
     global my_chat_id
@@ -83,7 +84,7 @@ def emergency_close_all():
     open_trades = c.fetchall()
     
     if not open_trades:
-        send_msg(my_chat_id, "⚠️ Koi open trade nahi hai boss.")
+        send_msg(my_chat_id, "⚠️ Koi open trade nahi hai.")
         conn.close()
         return
 
@@ -94,7 +95,6 @@ def emergency_close_all():
             data = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=2)
             if data is None or data.empty: continue
             c_price = data['close'].iloc[-1]
-            
             pnl = (c_price - entry) if t_type == "BUY 🟢" else (entry - c_price)
             c.execute("UPDATE pro_trades SET status=?, pnl=? WHERE id=?", ("CLOSED ⚠️", pnl, t_id))
             msg += f"🔹 {sym}: Exit @ ₹{c_price:.2f} | PnL: ₹{pnl:.2f}\n"
@@ -116,31 +116,20 @@ def manage_open_trades(sym, current_price):
 
     for t in trades:
         t_id, t_type, entry, sl, tp, tsl = t
-        status, pnl = "OPEN", 0.0
+        status, pnl, msg = "OPEN", 0.0, None
         new_tsl = tsl
-        msg = None
 
         if t_type == "BUY 🟢":
-            if current_price >= tp:
-                status, pnl, msg = "PROFIT ✅", tp - entry, f"🎯 *TARGET HIT: {sym}*\n💰 Profit: ₹{pnl:.2f}"
-            elif current_price <= sl:
-                status, pnl, msg = "LOSS ❌", sl - entry, f"🛑 *SL HIT: {sym}*\n💸 Loss: ₹{pnl:.2f}"
-            elif current_price <= tsl and tsl > sl: 
-                status, pnl, msg = "TSL HIT ⚠️", tsl - entry, f"⚠️ *TSL HIT: {sym}*\n💸 PnL: ₹{pnl:.2f}"
-            elif current_price > entry:
-                pot_tsl = current_price - (current_price * 0.001)
-                if pot_tsl > tsl: new_tsl = pot_tsl
+            if current_price >= tp: status, pnl, msg = "PROFIT ✅", tp - entry, f"🎯 *TARGET HIT: {sym}*\n💰 Profit: ₹{pnl:.2f}"
+            elif current_price <= sl: status, pnl, msg = "LOSS ❌", sl - entry, f"🛑 *SL HIT: {sym}*\n💸 Loss: ₹{pnl:.2f}"
+            elif current_price <= tsl and tsl > sl: status, pnl, msg = "TSL HIT ⚠️", tsl - entry, f"⚠️ *TSL HIT: {sym}*\n💸 PnL: ₹{pnl:.2f}"
+            elif current_price > entry: new_tsl = max(tsl, current_price - (current_price * 0.001))
 
         elif t_type == "SELL 🔴":
-            if current_price <= tp:
-                status, pnl, msg = "PROFIT ✅", entry - tp, f"🎯 *TARGET HIT: {sym}*\n💰 Profit: ₹{pnl:.2f}"
-            elif current_price >= sl:
-                status, pnl, msg = "LOSS ❌", entry - sl, f"🛑 *SL HIT: {sym}*\n💸 Loss: ₹{pnl:.2f}"
-            elif current_price >= tsl and tsl < sl:
-                status, pnl, msg = "TSL HIT ⚠️", entry - tsl, f"⚠️ *TSL HIT: {sym}*\n💸 PnL: ₹{pnl:.2f}"
-            elif current_price < entry:
-                pot_tsl = current_price + (current_price * 0.001)
-                if pot_tsl < tsl: new_tsl = pot_tsl
+            if current_price <= tp: status, pnl, msg = "PROFIT ✅", entry - tp, f"🎯 *TARGET HIT: {sym}*\n💰 Profit: ₹{pnl:.2f}"
+            elif current_price >= sl: status, pnl, msg = "LOSS ❌", entry - sl, f"🛑 *SL HIT: {sym}*\n💸 Loss: ₹{pnl:.2f}"
+            elif current_price >= tsl and tsl < sl: status, pnl, msg = "TSL HIT ⚠️", entry - tsl, f"⚠️ *TSL HIT: {sym}*\n💸 PnL: ₹{pnl:.2f}"
+            elif current_price < entry: new_tsl = min(tsl, current_price + (current_price * 0.001))
 
         c.execute("UPDATE pro_trades SET status=?, pnl=?, trailing_sl=? WHERE id=?", (status, pnl, new_tsl, t_id))
         if msg and not alerts_muted: send_msg(my_chat_id, msg)
@@ -149,7 +138,7 @@ def manage_open_trades(sym, current_price):
     conn.close()
 
 # ==========================================
-# 🧠 SMART SCANNER
+# 🧠 SMART SCANNER & STRATEGY ENGINE
 # ==========================================
 def calc_rsi(data):
     delta = data['close'].diff()
@@ -164,7 +153,7 @@ def calc_macd(data):
     return macd, macd.ewm(span=9, adjust=False).mean()
 
 def market_scanner_thread():
-    global my_chat_id, bot_paused, last_trade_signals, current_risk_percent, alerts_muted
+    global my_chat_id, bot_paused, last_trade_signals, strategy_mode, alerts_muted, current_risk_percent
     symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE']
     
     while True:
@@ -176,9 +165,11 @@ def market_scanner_thread():
         start_mkt = datetime.strptime("09:15", "%H:%M").time()
         end_mkt = datetime.strptime("15:30", "%H:%M").time()
         
-        if not (start_mkt <= now_time <= end_mkt):
-            time.sleep(60)
-            continue
+        # Uncomment below line for live market filtering
+        # if not (start_mkt <= now_time <= end_mkt): { time.sleep(60); continue }
+
+        buy_rsi = 60 if strategy_mode == "SAFE" else 50
+        sell_rsi = 40 if strategy_mode == "SAFE" else 50
 
         for sym in symbols:
             try:
@@ -205,9 +196,9 @@ def market_scanner_thread():
                 decision = "WAIT 🟡"
                 sl, tp, tsl = 0, 0, 0
                 
-                if c_price > c_ema and data['RSI'].iloc[-1] > 55 and macd.iloc[-1] > macd_sig.iloc[-1]:
+                if c_price > c_ema and data['RSI'].iloc[-1] > buy_rsi and macd.iloc[-1] > macd_sig.iloc[-1]:
                     decision, sl, tp, tsl = "BUY 🟢", c_price - (c_price * 0.002), c_price + (c_price * 0.005), c_price - (c_price * 0.001)
-                elif c_price < c_ema and data['RSI'].iloc[-1] < 45 and macd.iloc[-1] < macd_sig.iloc[-1]:
+                elif c_price < c_ema and data['RSI'].iloc[-1] < sell_rsi and macd.iloc[-1] < macd_sig.iloc[-1]:
                     decision, sl, tp, tsl = "SELL 🔴", c_price + (c_price * 0.002), c_price - (c_price * 0.005), c_price + (c_price * 0.001)
                 
                 if decision != "WAIT 🟡" and decision != last_trade_signals[sym]:
@@ -224,14 +215,12 @@ def market_scanner_thread():
                     qty = int(risk_amt / sl_dist) if sl_dist > 0 else 0
                     
                     if not alerts_muted:
-                        msg = (f"🚨 *ELITE ENTRY: {sym}* 🚨\n\n🤖 *Action:* {decision}\n🛒 *Qty:* {qty} (Risk {current_risk_percent}%)\n🔸 *Entry:* ₹{c_price:.2f}\n🎯 *Target:* ₹{tp:.2f}\n🛡️ *SL:* ₹{sl:.2f}")
+                        msg = (f"🚨 *{strategy_mode} ENTRY: {sym}* 🚨\n\n🤖 *Action:* {decision}\n🛒 *Qty:* {qty} (Risk {current_risk_percent}%)\n🔸 *Entry:* ₹{c_price:.2f}\n🎯 *Target:* ₹{tp:.2f}\n🛡️ *SL:* ₹{sl:.2f}")
                         send_msg(my_chat_id, msg)
                     
-                elif decision == "WAIT 🟡":
-                    last_trade_signals[sym] = "WAIT 🟡" 
+                elif decision == "WAIT 🟡": last_trade_signals[sym] = "WAIT 🟡" 
                     
-            except Exception as e:
-                logging.error(f"Scan Error on {sym}: {e}")
+            except Exception as e: logging.error(f"Scan Error on {sym}: {e}")
             time.sleep(2) 
         time.sleep(60) 
 
@@ -239,7 +228,7 @@ def market_scanner_thread():
 # 📱 TELEGRAM LISTENER (COMMANDS + BUTTONS)
 # ==========================================
 def telegram_listener():
-    global my_chat_id, bot_paused, current_risk_percent, alerts_muted
+    global my_chat_id, bot_paused, current_risk_percent, alerts_muted, strategy_mode
     last_update_id = None
     
     while True:
@@ -259,22 +248,62 @@ def telegram_listener():
                         my_chat_id = update["message"]["chat"]["id"] 
                         user_text = update["message"]["text"]
                         
-                        # 👑 COMMANDS & BUTTONS LOGIC
+                        # 👑 COMMANDS LOGIC
                         if user_text == "/start":
-                            send_msg(my_chat_id, "👑 V4.0 GOD MODE ON! Pro Terminal Active.")
+                            send_msg(my_chat_id, "👑 V5.0 ULTIMATE TERMINAL ON!\nSystem Live & Reading Markets.")
                         
                         elif user_text in ["⏸ Pause Bot", "/pause"]:
                             bot_paused = True
                             send_msg(my_chat_id, "🛑 Bot PAUSED.")
-                            
                         elif user_text in ["▶️ Resume Bot", "/resume"]:
                             bot_paused = False
                             send_msg(my_chat_id, "✅ Bot RESUMED.")
                             
+                        elif user_text == "🔕 Mute Alerts":
+                            alerts_muted = True
+                            send_msg(my_chat_id, "🔕 Alerts Muted. (Trades will run silently)")
+                        elif user_text == "🔔 Unmute Alerts":
+                            alerts_muted = False
+                            send_msg(my_chat_id, "🔔 Alerts ON.")
+
+                        elif user_text == "📅 Today Report":
+                            today = get_ist_time().strftime("%Y-%m-%d")
+                            conn = sqlite3.connect('trades.db')
+                            c = conn.cursor()
+                            c.execute("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{today}%",))
+                            pnl = c.fetchone()[0] or 0
+                            c.execute("SELECT COUNT(*) FROM pro_trades WHERE date LIKE ? AND status='PROFIT ✅'", (f"{today}%",))
+                            wins = c.fetchone()[0]
+                            c.execute("SELECT COUNT(*) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{today}%",))
+                            total = c.fetchone()[0]
+                            conn.close()
+                            send_msg(my_chat_id, f"📅 *Today's Live Report*\n\n💰 Total PnL: ₹{pnl:.2f}\n📊 Trades Taken: {total}\n✅ Winning Trades: {wins}")
+
+                        elif user_text == "📉 Drawdown":
+                            conn = sqlite3.connect('trades.db')
+                            c = conn.cursor()
+                            c.execute("SELECT pnl FROM pro_trades WHERE status!='OPEN' ORDER BY id ASC")
+                            rows = c.fetchall()
+                            conn.close()
+                            cum_pnl, peak, max_dd = 0, 0, 0
+                            for r in rows:
+                                cum_pnl += r[0]
+                                if cum_pnl > peak: peak = cum_pnl
+                                dd = peak - cum_pnl
+                                if dd > max_dd: max_dd = dd
+                            send_msg(my_chat_id, f"📉 *Risk Analysis*\n\n🔥 Max Drawdown: ₹{max_dd:.2f}\n(Peak se maximum loss)")
+
+                        elif user_text == "/safe":
+                            strategy_mode = "SAFE"
+                            send_msg(my_chat_id, "🛡️ Mode: *SAFE*\nBot will only take strong setups (RSI > 60).")
+                        elif user_text == "/agg":
+                            strategy_mode = "AGGRESSIVE"
+                            send_msg(my_chat_id, "⚡ Mode: *AGGRESSIVE*\nBot will take early entries (RSI > 50).")
+
                         elif user_text in ["📊 Check Status", "/status"]:
                             st = "⏸ Paused" if bot_paused else "▶️ Active"
                             al = "🔕 Muted" if alerts_muted else "🔔 ON"
-                            send_msg(my_chat_id, f"📡 *Status:* {st}\n🕒 *Market:* 9:15-15:30\n🛡️ *Risk:* {current_risk_percent}%\n🔔 *Alerts:* {al}")
+                            send_msg(my_chat_id, f"📡 *System Status:*\n\n🔄 Bot: {st}\n🧠 Mode: {strategy_mode}\n🛡️ Risk: {current_risk_percent}%\n🔔 Alerts: {al}")
                             
                         elif user_text in ["💰 View PnL", "/pnl"]:
                             conn = sqlite3.connect('trades.db')
@@ -282,7 +311,7 @@ def telegram_listener():
                             c.execute("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
                             total = c.fetchone()[0] or 0
                             conn.close()
-                            send_msg(my_chat_id, f"💰 *Total PnL:* ₹{total:.2f}")
+                            send_msg(my_chat_id, f"💰 *Net PnL:* ₹{total:.2f}")
                             
                         elif user_text in ["📊 Win Rate", "/winrate"]:
                             conn = sqlite3.connect('trades.db')
@@ -294,7 +323,7 @@ def telegram_listener():
                             total = wins + losses
                             rate = (wins/total*100) if total > 0 else 0
                             conn.close()
-                            send_msg(my_chat_id, f"📊 *Win Rate:* {rate:.2f}%\n✅ Wins: {wins}\n❌ Losses: {losses}")
+                            send_msg(my_chat_id, f"📊 *Performance Stats*\n\n🏆 Win Rate: {rate:.2f}%\n✅ Wins: {wins}\n❌ Losses: {losses}\n⚖️ Total Trades: {total}")
                             
                         elif user_text in ["📂 Open Trades", "/open"]:
                             conn = sqlite3.connect('trades.db')
@@ -305,26 +334,23 @@ def telegram_listener():
                                 msg = "⚡ *LIVE OPEN TRADES:*\n\n"
                                 for r in rows: msg += f"🔹 {r[0]} | {r[1]} @ ₹{r[2]:.2f}\n"
                                 send_msg(my_chat_id, msg)
-                            else:
-                                send_msg(my_chat_id, "Abhi koi trade open nahi hai.")
+                            else: send_msg(my_chat_id, "Abhi koi trade open nahi hai.")
                             conn.close()
                             
                         elif user_text in ["❌ Close All", "/closeall"]:
                             emergency_close_all()
                             
                         elif user_text == "⚙️ Set Risk":
-                            send_msg(my_chat_id, "⚙️ Risk set karne ke liye type karein:\n\n👉 `/risk 1` (For 1% Risk)\n👉 `/risk 2.5` (For 2.5% Risk)")
+                            send_msg(my_chat_id, "⚙️ Change Risk using commands:\n\n👉 `/risk 1` (For 1%)\n👉 `/risk 2.5` (For 2.5%)")
                             
                         elif user_text.startswith("/risk "):
                             try:
-                                new_risk = float(user_text.split(" ")[1])
-                                current_risk_percent = new_risk
-                                send_msg(my_chat_id, f"✅ Done! Risk is now set to *{new_risk}%* per trade.")
-                            except:
-                                send_msg(my_chat_id, "⚠️ Format error. Aise likhein: `/risk 2`")
-                                
+                                current_risk_percent = float(user_text.split(" ")[1])
+                                send_msg(my_chat_id, f"✅ Done! Risk set to *{current_risk_percent}%* per trade.")
+                            except: send_msg(my_chat_id, "⚠️ Type like this: `/risk 2`")
+                            
                         elif user_text in ["📉 Market Trend", "/trend"]:
-                            msg = "📉 *LIVE MARKET TREND:*\n\n"
+                            msg = "📉 *LIVE MARKET TREND (15M):*\n\n"
                             symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE']
                             for sym in symbols:
                                 try:
@@ -342,11 +368,10 @@ def telegram_listener():
                             c.execute('SELECT date, symbol, type, pnl, status FROM pro_trades WHERE status!="OPEN" ORDER BY id DESC LIMIT 5')
                             rows = c.fetchall()
                             if rows:
-                                hist = "📂 *Last 5 Trades:*\n\n"
+                                hist = "📂 *Last 5 Executions:*\n\n"
                                 for r in rows: hist += f"🗓 {r[0]}\n{r[1]} | {r[2]} | {r[4]} | ₹{r[3]:.2f}\n\n"
                                 send_msg(my_chat_id, hist)
-                            else:
-                                send_msg(my_chat_id, "No history found.")
+                            else: send_msg(my_chat_id, "No history found.")
                             conn.close()
                                 
             time.sleep(1)
