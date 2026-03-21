@@ -7,7 +7,6 @@ from tvDatafeed import TvDatafeed, Interval
 from flask import Flask
 import os
 from threading import Thread
-import json
 
 # ==========================================
 # 🌐 DUMMY WEB SERVER (Cloud ke liye)
@@ -48,7 +47,7 @@ def save_trade(symbol, trade_type, price, sl, tp):
     conn.commit()
     conn.close()
 
-# Power 4: Telegram Buttons bhejne ka function
+# Power 4: Telegram Buttons bhejne ka function (BUG FIXED HERE)
 def send_msg(chat_id, text, show_buttons=True):
     url = f"{BASE_URL}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
@@ -61,7 +60,8 @@ def send_msg(chat_id, text, show_buttons=True):
             ],
             "resize_keyboard": True
         }
-        payload["reply_markup"] = json.dumps(keyboard)
+        # Yahan problem thi, ab theek ho gayi hai!
+        payload["reply_markup"] = keyboard
         
     requests.post(url, json=payload)
 
@@ -113,14 +113,12 @@ def auto_scan_market():
             decision = "WAIT 🟡"
             sl, tp = 0, 0
             
-            # Power 1: TRIPLE CONFIRMATION LOGIC
-            # BUY: Price EMA ke upar + RSI 50 se upar + MACD Signal line ke upar
+            # TRIPLE CONFIRMATION LOGIC
             if current_price > current_ema and current_rsi > 50 and current_macd > current_signal:
                 decision = "BUY 🟢"
-                sl = current_price - (current_price * 0.002) # Power 3: 0.2% Stoploss
-                tp = current_price + (current_price * 0.004) # Power 3: 0.4% Target
+                sl = current_price - (current_price * 0.002) 
+                tp = current_price + (current_price * 0.004) 
                 
-            # SELL: Price EMA ke niche + RSI 50 se niche + MACD Signal line ke niche
             elif current_price < current_ema and current_rsi < 50 and current_macd < current_signal:
                 decision = "SELL 🔴"
                 sl = current_price + (current_price * 0.002) 
@@ -168,11 +166,11 @@ while True:
                     user_text = update["message"]["text"]
                     
                     if user_text == "/start":
-                        send_msg(my_chat_id, "Boss, Ultimate Bot Cloud par Zinda hai! ☁️🔥 Ab button se control karein.")
+                        send_msg(my_chat_id, "Boss, Ultimate Bot Cloud par Zinda hai! ☁️🔥 Niche diye gaye buttons se control karein.")
                         
                     elif user_text == "⏸ Pause Bot":
                         bot_paused = True
-                        send_msg(my_chat_id, "🛑 Bot ko PAUSE kar diya gaya hai. Ab main market scan nahi karunga.")
+                        send_msg(my_chat_id, "🛑 Bot ko PAUSE kar diya gaya hai. Ab main scan nahi karunga.")
                         
                     elif user_text == "▶️ Resume Bot":
                         bot_paused = False
@@ -189,9 +187,9 @@ while True:
                         rows = c.fetchall()
                         conn.close()
                         if rows:
-                            hist_msg = "📂 *Aakhiri 3 Trades:*\n"
+                            hist_msg = "📂 *Aakhiri 3 Trades:*\n\n"
                             for r in rows:
-                                hist_msg += f"🗓 {r[0]} | {r[1]} | {r[2]} @ ₹{r[3]:.2f}\n"
+                                hist_msg += f"🗓 {r[0]}\n📈 {r[1]} | {r[2]} @ ₹{r[3]:.2f}\n\n"
                             send_msg(my_chat_id, hist_msg)
                         else:
                             send_msg(my_chat_id, "Abhi tak koi trade nahi liya hai.")
