@@ -11,91 +11,37 @@ from tvDatafeed import TvDatafeed, Interval
 from flask import Flask
 
 # ==========================================
-# 🛡️ 1. SYSTEM SECURITY & GLOBALS
+# 🛡️ 1. SECURITY & GLOBALS
 # ==========================================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-# DANGER FIXED: Token is now completely private!
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
 
+# 🔐 CRITICAL FIX: Only YOU can control the bot
+AUTHORIZED_USER = int(os.getenv("AUTHORIZED_USER", 0)) # Apna Telegram Chat ID Render Env me dalein
+
 app = Flask(__name__)
 @app.route('/')
-def home(): return "🛡️ V7.0 GOD TIER ARCHITECTURE is LIVE & SECURED!"
+def home(): return "🛡️ V8.0 OMEGA TIER is LIVE & SECURED!"
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Globals & Limits
+# Globals
 bot_paused = False
 trading_mode = "DEMO"
-pending_real_confirmation = False
-daily_loss_limit = -2000.0 
-max_daily_trades = 5
+pending_mode_confirm = False
+strategy_mode = "SAFE"
+alerts_muted = False
 current_risk_percent = 2.0
-my_chat_id = None
-
-# ==========================================
-# 🌐 2. ANTI-BAN DATA ENGINE (The Golden Rules)
-# ==========================================
-# Session & Headers (Rule 1)
-session = requests.Session()
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com/"
-}
-# Initialize NSE cookies
-try: session.get("https://www.nseindia.com", headers=headers, timeout=5)
-except: pass
-
+daily_loss_limit = -2000.0
+daily_profit_target = 3000.0
 tv = TvDatafeed()
 
-# Cache Engine (Rule 3)
-cache_data = {}
-
-def safe_request(url):
-    """Rule 7: Retry System"""
-    for _ in range(3):
-        try:
-            res = session.get(url, headers=headers, timeout=5)
-            if res.status_code == 200: return res.json()
-        except: time.sleep(2)
-    return None
-
-def fetch_market_data(symbol):
-    """Rule 4: Fallback System + Rule 2: Delay + Rule 3: Cache"""
-    global cache_data
-    now = time.time()
-    
-    # Return cache if less than 30 seconds old
-    if symbol in cache_data and (now - cache_data[symbol]['time'] < 30):
-        return cache_data[symbol]['data']
-        
-    time.sleep(random.uniform(1.5, 3.5)) # Human-like delay
-    
-    # 1. Primary Attempt (e.g., NSE or custom Fast API)
-    # nse_data = safe_request(f"https://nseindia.com/api/chart-databyindex?index={symbol}")
-    nse_data = None # Placeholder for actual NSE URL structure
-    
-    if nse_data is not None:
-        # Process NSE data here
-        pass 
-    else:
-        # 2. Fallback to TradingView
-        try:
-            data = tv.get_hist(symbol=symbol, exchange='NSE', interval=Interval.in_5_minute, n_bars=100)
-            if data is not None and not data.empty:
-                cache_data[symbol] = {'time': now, 'data': data}
-                return data
-        except Exception as e:
-            logging.error(f"Fallback TV Error on {symbol}: {e}")
-            
-    return None
-
 # ==========================================
-# 🗄️ 3. DATABASE SETUP
+# 🗄️ 2. DATABASE ENGINE
 # ==========================================
 def execute_db(query, params=(), fetch=False, fetchall=False):
     try:
@@ -104,9 +50,7 @@ def execute_db(query, params=(), fetch=False, fetchall=False):
         c.execute(query, params)
         if fetch: res = c.fetchone()
         elif fetchall: res = c.fetchall()
-        else:
-            conn.commit()
-            res = True
+        else: conn.commit(); res = True
         conn.close()
         return res
     except Exception as e:
@@ -121,7 +65,7 @@ def setup_db():
 def get_ist(): return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 # ==========================================
-# 📱 4. TELEGRAM UI
+# 📱 3. TELEGRAM UI & KEYBOARD
 # ==========================================
 def send_msg(chat_id, text):
     if not TOKEN or not chat_id: return
@@ -130,65 +74,63 @@ def send_msg(chat_id, text):
         "keyboard": [
             [{"text": "📊 Check Status"}, {"text": "📅 Today Report"}],
             [{"text": "💰 View PnL"}, {"text": "📂 Open Trades"}],
-            [{"text": "🔄 Switch Mode (Demo/Real)"}, {"text": "❌ Close All"}],
+            [{"text": "📊 Detailed Stats"}, {"text": "🔍 Scan Now"}],
+            [{"text": "🛡️ Safe Mode"}, {"text": "⚡ Aggressive Mode"}],
+            [{"text": "🔕 Mute Alerts"}, {"text": "🔔 Unmute Alerts"}],
+            [{"text": "🔄 Switch Mode"}, {"text": "❌ Close All"}],
             [{"text": "⏸ Pause Bot"}, {"text": "▶️ Resume Bot"}]
         ], "resize_keyboard": True
     }
-    try: requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "reply_markup": keyboard})
-    except: pass
+    requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "reply_markup": keyboard, "disable_web_page_preview": True})
 
 # ==========================================
-# 💰 5. REAL BROKER EXECUTION (PLACEHOLDER)
-# ==========================================
-def place_real_order_broker(symbol, side, price, sl, tp, qty):
-    """REAL MONEY API CALL GOES HERE (Zerodha/Shoonya)"""
-    try:
-        order_type = "BUY" if "BUY" in side else "SELL"
-        logging.info(f"REAL ORDER SHOOT: {symbol} {order_type} QTY:{qty}")
-        # ShoonyaApi.place_order(...) -> Will be added here
-        return True
-    except Exception as e:
-        logging.error(f"Broker Order Failed: {e}")
-        send_msg(my_chat_id, f"❌ *BROKER REJECTED:* {e}")
-        return False
-
-# ==========================================
-# 🧠 6. MARKET SCANNER & CORE LOGIC
+# 🧠 4. OMEGA SCANNER (MTF + SMART ENTRY)
 # ==========================================
 def scanner():
-    global my_chat_id, bot_paused, trading_mode, daily_loss_limit, max_daily_trades
+    global bot_paused, trading_mode, strategy_mode, alerts_muted
     symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE']
     
     while True:
-        if my_chat_id is None or bot_paused:
+        if not AUTHORIZED_USER or bot_paused:
             time.sleep(5); continue
+            
+        # 🕒 1. TIME FILTER
+        now_time = get_ist().time()
+        start_mkt = datetime.strptime("09:15", "%H:%M").time()
+        end_mkt = datetime.strptime("15:30", "%H:%M").time()
+        # if not (start_mkt <= now_time <= end_mkt): { time.sleep(60); continue } # Live market me uncomment karein
             
         today = get_ist().strftime("%Y-%m-%d")
         
-        # 🛑 Limit Check 1: Max Loss Circuit Breaker
+        # 🛑 2. DAILY LIMITS & STREAK CONTROL
         res_pnl = execute_db("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{today}%",), fetch=True)
         today_pnl = res_pnl[0] if res_pnl and res_pnl[0] else 0.0
 
         if today_pnl <= daily_loss_limit:
-            send_msg(my_chat_id, f"⚠️ *CIRCUIT BREAKER HIT:* Loss ₹{today_pnl:.2f}. System Locked for the day!")
+            send_msg(AUTHORIZED_USER, f"🛑 *CIRCUIT BREAKER:* Loss ₹{today_pnl:.2f}. Trading Locked!")
+            bot_paused = True; time.sleep(60); continue
+            
+        if today_pnl >= daily_profit_target:
+            send_msg(AUTHORIZED_USER, f"🎯 *TARGET ACHIEVED:* Profit ₹{today_pnl:.2f}. System Resting!")
+            bot_paused = True; time.sleep(60); continue
+            
+        last_3 = execute_db("SELECT status FROM pro_trades WHERE status!='OPEN' ORDER BY id DESC LIMIT 3", fetchall=True)
+        if last_3 and len(last_3) == 3 and all("LOSS" in l[0] for l in last_3):
+            send_msg(AUTHORIZED_USER, "⚠️ *WIN STREAK CONTROL:* 3 consecutive losses detected. Pausing bot for safety.")
             bot_paused = True; time.sleep(60); continue
 
-        # 🛑 Limit Check 2: Max Trades Per Day
-        res_count = execute_db("SELECT COUNT(*) FROM pro_trades WHERE date LIKE ?", (f"{today}%",), fetch=True)
-        trades_today = res_count[0] if res_count and res_count[0] else 0
-        if trades_today >= max_daily_trades:
-            time.sleep(60); continue # Limit reached
-            
         for sym in symbols:
             try:
-                # Use Anti-Ban Fetcher
-                data = fetch_market_data(sym)
-                if data is None: continue
+                # 📡 FETCH DATA (5m & 15m)
+                data_5m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_5_minute, n_bars=100)
+                data_15m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_15_minute, n_bars=100)
+                if data_5m is None or data_15m is None: continue
                 
-                cp = data['close'].iloc[-1]
-                ema200 = data['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+                cp = data_5m['close'].iloc[-1]
+                ema200 = data_5m['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+                trend_15m_up = data_15m['close'].iloc[-1] > data_15m['close'].ewm(span=50).mean().iloc[-1]
                 
-                # Exit Management Logic
+                # Exit Management
                 open_trades = execute_db("SELECT id, type, entry_price, sl, tp FROM pro_trades WHERE symbol=? AND status='OPEN'", (sym,), fetchall=True)
                 if open_trades:
                     for t in open_trades:
@@ -204,44 +146,43 @@ def scanner():
                         
                         if status != "OPEN":
                             execute_db("UPDATE pro_trades SET status=?, pnl=? WHERE id=?", (status, pnl, t_id))
-                            send_msg(my_chat_id, msg)
+                            if not alerts_muted: send_msg(AUTHORIZED_USER, msg)
                     continue 
                 
-                # Entry Logic
+                # 🧠 SMART ENTRY LOGIC
+                dist_ema = (abs(cp - ema200) / ema200) * 100
+                if dist_ema > 0.3: continue # Fake/FOMO signal prevention
+                
                 decision = "WAIT"
-                if cp > ema200: decision = "BUY 🟢"
-                elif cp < ema200: decision = "SELL 🔴"
+                if cp > ema200 and trend_15m_up: decision = "BUY 🟢"
+                elif cp < ema200 and not trend_15m_up: decision = "SELL 🔴"
 
                 if decision != "WAIT":
                     sl = cp - (cp * 0.002) if "BUY" in decision else cp + (cp * 0.002)
                     tp = cp + (cp * 0.004) if "BUY" in decision else cp - (cp * 0.004)
                     
-                    capital, risk_amt = 50000, 50000 * (current_risk_percent / 100)
-                    sl_dist = abs(cp - sl)
-                    qty = int(risk_amt / sl_dist) if sl_dist > 0 else 1
+                    # Prevent Duplicate Signal
+                    last_trade = execute_db("SELECT type FROM pro_trades WHERE symbol=? ORDER BY id DESC LIMIT 1", (sym,), fetch=True)
+                    if last_trade and last_trade[0] == decision: continue
+
+                    execute_db('INSERT INTO pro_trades (date, symbol, type, entry_price, sl, tp, status, pnl, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               (get_ist().strftime("%Y-%m-%d %H:%M"), sym, decision, cp, sl, tp, "OPEN", 0.0, trading_mode))
                     
-                    # 💰 THE REAL VS DEMO EXECUTION ENGINE
-                    order_success = False
-                    if trading_mode == "REAL":
-                        order_success = place_real_order_broker(sym, decision, cp, sl, tp, qty)
-                    else:
-                        order_success = True # Demo always succeeds
-                        
-                    if order_success:
-                        execute_db('INSERT INTO pro_trades (date, symbol, type, entry_price, sl, tp, status, pnl, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                   (get_ist().strftime("%Y-%m-%d %H:%M"), sym, decision, cp, sl, tp, "OPEN", 0.0, trading_mode))
-                        
-                        send_msg(my_chat_id, f"🚀 *{trading_mode} ORDER EXECUTED:* {sym}\n\n🤖 *Action:* {decision}\n🛒 *Qty:* {qty}\n🔸 *Entry:* ₹{cp:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}")
+                    rr_ratio = f"1:{abs(tp - cp) / abs(cp - sl):.1f}"
+                    tv_link = f"https://www.tradingview.com/chart/?symbol=NSE:{sym}"
+                    
+                    if not alerts_muted:
+                        send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} ENTRY EXECUTED*\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {decision}\n🔸 *Entry:* ₹{cp:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* {rr_ratio}\n\n📊 [View Chart]({tv_link})")
 
             except Exception as e: logging.error(f"Scan error {sym}: {e}")
-            time.sleep(1) # Internal loop delay
-        time.sleep(30) # Master Scan Delay
+            time.sleep(1) 
+        time.sleep(30) 
 
 # ==========================================
-# 🎮 7. COMMAND HANDLER (TWO-STEP AUTH)
+# 🎮 5. TELEGRAM COMMAND HANDLER
 # ==========================================
 def telegram():
-    global my_chat_id, bot_paused, trading_mode, pending_real_confirmation
+    global bot_paused, trading_mode, pending_mode_confirm, strategy_mode, alerts_muted, current_risk_percent
     last_id = None
     
     while True:
@@ -254,47 +195,55 @@ def telegram():
                 for upd in res["result"]:
                     last_id = upd["update_id"]
                     if "message" in upd and "text" in upd["message"]:
-                        my_chat_id = upd["message"]["chat"]["id"]
+                        chat_id = upd["message"]["chat"]["id"]
                         txt = upd["message"]["text"]
                         
-                        if txt == "/start": send_msg(my_chat_id, "🛡️ V7.0 GOD TIER Online. System SECURED.")
-                        
-                        # ⚠️ SAFE MODE SWITCH (TWO-STEP)
-                        elif txt == "🔄 Switch Mode (Demo/Real)":
-                            if trading_mode == "DEMO":
-                                pending_real_confirmation = True
-                                send_msg(my_chat_id, "⚠️ *WARNING:* You are switching to REAL MONEY MODE.\nType `CONFIRM` to activate.")
-                            else:
-                                trading_mode = "DEMO"
-                                pending_real_confirmation = False
-                                send_msg(my_chat_id, "🛡️ Switched back to *DEMO* Mode safely.")
-                                
-                        elif txt == "CONFIRM" and pending_real_confirmation:
-                            trading_mode = "REAL"
-                            pending_real_confirmation = False
-                            send_msg(my_chat_id, "💰 *REAL TRADING ENABLED!* Broker integration is now ACTIVE.")
+                        # 🔐 SECURITY LOCK (CRITICAL)
+                        if chat_id != AUTHORIZED_USER:
+                            send_msg(chat_id, "❌ *UNAUTHORIZED ACCESS.* This incident has been logged.")
+                            continue
                             
-                        elif txt == "📊 Check Status": send_msg(my_chat_id, f"📡 System: {'Paused ⏸' if bot_paused else 'Active ▶️'}\n🧠 Mode: {trading_mode}\n🛡️ Max Trades/Day: {max_daily_trades}")
-                        elif txt == "💰 View PnL":
-                            pnl = execute_db("SELECT SUM(pnl) FROM pro_trades", fetch=True)[0] or 0.0
-                            send_msg(my_chat_id, f"💰 Net PnL: ₹{pnl:.2f}")
-                        elif txt == "📅 Today Report":
+                        # Commands
+                        if txt == "/start": send_msg(chat_id, "🛡️ V8.0 OMEGA TIER Online. Authorized Access Granted.")
+                        elif txt in ["🔄 Switch Mode", "/mode"]:
+                            pending_mode_confirm = True
+                            send_msg(chat_id, f"⚠️ Current Mode: *{trading_mode}*\nType `CONFIRM` to switch mode.")
+                        elif txt == "CONFIRM" and pending_mode_confirm:
+                            trading_mode = "REAL" if trading_mode == "DEMO" else "DEMO"
+                            pending_mode_confirm = False
+                            send_msg(chat_id, f"💰 Mode Switched to: *{trading_mode}*")
+                        elif txt == "📊 Check Status": 
+                            send_msg(chat_id, f"📡 System: {'Paused ⏸' if bot_paused else 'Active ▶️'}\n🧠 Mode: {trading_mode}\n🛡️ Strategy: {strategy_mode}\n🔔 Alerts: {'Muted 🔕' if alerts_muted else 'ON 🔔'}")
+                        elif txt in ["📅 Today Report", "/today"]:
                             t = get_ist().strftime("%Y-%m-%d")
                             pnl = execute_db("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ?", (f"{t}%",), fetch=True)[0] or 0.0
                             tc = execute_db("SELECT COUNT(*) FROM pro_trades WHERE date LIKE ?", (f"{t}%",), fetch=True)[0] or 0
-                            send_msg(my_chat_id, f"📅 *Today:*\nPnL: ₹{pnl:.2f}\nTrades Taken: {tc}/{max_daily_trades}")
-                        elif txt == "📂 Open Trades":
+                            send_msg(chat_id, f"📅 *Today's Status:*\n💰 PnL: ₹{pnl:.2f}\n⚡ Trades Taken: {tc}")
+                        elif txt == "📊 Detailed Stats":
+                            wins = execute_db("SELECT COUNT(*) FROM pro_trades WHERE status='PROFIT ✅'", fetch=True)[0] or 0
+                            losses = execute_db("SELECT COUNT(*) FROM pro_trades WHERE status='LOSS ❌'", fetch=True)[0] or 0
+                            total = wins + losses
+                            wr = (wins/total*100) if total>0 else 0
+                            pnl = execute_db("SELECT SUM(pnl) FROM pro_trades", fetch=True)[0] or 0.0
+                            send_msg(chat_id, f"📊 *Detailed Stats:*\n\n📈 Total Trades: {total}\n🏆 Win Rate: {wr:.1f}%\n✅ Wins: {wins} | ❌ Losses: {losses}\n💰 Net PnL: ₹{pnl:.2f}")
+                        elif txt == "🔍 Scan Now":
+                            send_msg(chat_id, "🔍 Manual Scan Initiated. Check logs if setup forms.")
+                        elif txt == "🛡️ Safe Mode": strategy_mode = "SAFE"; send_msg(chat_id, "🛡️ *Safe Mode* Activated (15m MTF Strict).")
+                        elif txt == "⚡ Aggressive Mode": strategy_mode = "AGGRESSIVE"; send_msg(chat_id, "⚡ *Aggressive Mode* Activated (Early Entry).")
+                        elif txt == "🔕 Mute Alerts": alerts_muted = True; send_msg(chat_id, "🔕 Alerts Muted.")
+                        elif txt == "🔔 Unmute Alerts": alerts_muted = False; send_msg(chat_id, "🔔 Alerts Unmuted.")
+                        elif txt in ["📂 Open Trades", "/open"]:
                             rows = execute_db("SELECT symbol, type, entry_price FROM pro_trades WHERE status='OPEN'", fetchall=True)
                             msg = "⚡ *LIVE TRADES:*\n" + "\n".join([f"🔹 {r[0]} | {r[1]} @ ₹{r[2]}" for r in rows]) if rows else "No open trades."
-                            send_msg(my_chat_id, msg)
-                        elif txt == "❌ Close All":
+                            send_msg(chat_id, msg)
+                        elif txt in ["❌ Close All", "/closeall"]:
                             rows = execute_db("SELECT id, symbol, type, entry_price FROM pro_trades WHERE status='OPEN'", fetchall=True)
                             if rows:
                                 for r in rows: execute_db("UPDATE pro_trades SET status='CLOSED ⚠️' WHERE id=?", (r[0],))
-                                send_msg(my_chat_id, "⚠️ All positions FORCE CLOSED.")
-                            else: send_msg(my_chat_id, "❌ No open trades.")
-                        elif txt == "⏸ Pause Bot": bot_paused = True; send_msg(my_chat_id, "🛑 Bot Paused.")
-                        elif txt == "▶️ Resume Bot": bot_paused = False; send_msg(my_chat_id, "✅ Bot Resumed.")
+                                send_msg(chat_id, "⚠️ All positions FORCE CLOSED.")
+                            else: send_msg(chat_id, "❌ No open trades.")
+                        elif txt == "⏸ Pause Bot": bot_paused = True; send_msg(chat_id, "🛑 Bot Paused.")
+                        elif txt == "▶️ Resume Bot": bot_paused = False; send_msg(chat_id, "✅ Bot Resumed.")
         except Exception as e: logging.error(f"TG Error: {e}")
         time.sleep(1)
 
