@@ -18,36 +18,37 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
 
-# BUG FIX 2: AUTHORIZED_USER Fallback Check
 AUTHORIZED_USER = int(os.getenv("AUTHORIZED_USER", 0))
 if AUTHORIZED_USER == 0:
-    logging.error("🚨 CRITICAL: AUTHORIZED_USER is NOT SET! Bot will reject all commands.")
+    logging.error("🚨 CRITICAL: AUTHORIZED_USER not set! Bot will reject commands.")
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "💎 V9.0 PRO TRADING ENGINE is LIVE!"
+def home(): return "💎 V10.0 FINAL ALGO is LIVE!"
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Globals
+# Globals & Advanced Controls
 bot_paused = False
 trading_mode = "DEMO"
-pending_mode_confirm = False
 strategy_mode = "SAFE"
 alerts_muted = False
 current_risk_percent = 2.0
 daily_loss_limit = -2000.0
 daily_profit_target = 3000.0
-last_signal = {} # BUG FIX 7: Spam control
+max_daily_trades = 5          # High Value Add: Max Trades
+trade_cooldown_seconds = 300  # High Value Add: 5 Min Cooldown
+last_trade_time = {}          # Bug Fix 8: Cooldown tracking
+last_signal = {}              # Bug Fix 7: Spam control
+scan_running = False          # Bug Fix 4: Thread lock
 tv = TvDatafeed()
 
 # ==========================================
-# 🗄️ 2. DATABASE ENGINE
+# 🗄️ 2. SAFE DATABASE ENGINE
 # ==========================================
 def execute_db(query, params=(), fetch=False, fetchall=False):
-    # BUG FIX 10: Increased timeout to 20 for thread safety
     try:
         conn = sqlite3.connect('trades.db', timeout=20)
         c = conn.cursor()
@@ -62,7 +63,6 @@ def execute_db(query, params=(), fetch=False, fetchall=False):
         return None
 
 def get_val(query, params=()):
-    # BUG FIX 1: Safe DB Fetch to prevent NoneType crash
     res = execute_db(query, params, fetch=True)
     return res[0] if res and res[0] else 0.0
 
@@ -74,7 +74,7 @@ def setup_db():
 def get_ist(): return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 # ==========================================
-# 📱 3. TELEGRAM UI & KEYBOARD
+# 📱 3. TELEGRAM UI & RATE LIMITER
 # ==========================================
 def send_msg(chat_id, text):
     if not TOKEN or not chat_id: return
@@ -82,21 +82,21 @@ def send_msg(chat_id, text):
     keyboard = {
         "keyboard": [
             [{"text": "📊 Check Status"}, {"text": "📅 Today Report"}],
-            [{"text": "💰 View PnL"}, {"text": "📈 Live PnL"}], # NEW: Live PnL Button
+            [{"text": "💰 View PnL"}, {"text": "📈 Live PnL"}],
             [{"text": "📊 Detailed Stats"}, {"text": "🔍 Scan Now"}],
             [{"text": "🛡️ Safe Mode"}, {"text": "⚡ Aggressive Mode"}],
             [{"text": "🔄 Switch Mode"}, {"text": "❌ Close All"}],
             [{"text": "⏸ Pause Bot"}, {"text": "▶️ Resume Bot"}]
         ], "resize_keyboard": True
     }
-    # BUG FIX 3: Timeout added + Try/Except to prevent silent crashes
     try:
         requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "reply_markup": keyboard, "disable_web_page_preview": True}, timeout=5)
+        time.sleep(0.5) # BUG FIX 5: Telegram Flood Risk Preventer
     except Exception as e:
         logging.error(f"Telegram send failed: {e}")
 
 # ==========================================
-# 🧠 4. PRO TRADING ENGINE (SCANS & LOGIC)
+# 🧠 4. CORE ENGINE & LOGIC
 # ==========================================
 def calc_macd(data):
     ema12 = data['close'].ewm(span=12, adjust=False).mean()
@@ -105,59 +105,64 @@ def calc_macd(data):
     return macd, macd.ewm(span=9, adjust=False).mean()
 
 def run_scan_cycle(manual=False):
-    """Core scanning logic decoupled for auto and manual triggers"""
-    global trading_mode, strategy_mode, alerts_muted, current_risk_percent, last_signal
+    global strategy_mode, alerts_muted, current_risk_percent, last_signal, last_trade_time, scan_running, max_daily_trades
     symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE']
-    
     today = get_ist().strftime("%Y-%m-%d")
     now_time = get_ist().time()
     
-    # 🛑 PRO UPGRADE 8: Session Based Trading (Only high momentum times)
+    # Session Trading Filter
     m1_start, m1_end = dt_time(9, 15), dt_time(10, 30)
     m2_start, m2_end = dt_time(14, 30), dt_time(15, 30)
-    
-    if not manual: # Manual scan bypasses session filter
-        if not ((m1_start <= now_time <= m1_end) or (m2_start <= now_time <= m2_end)):
-            return # Skip if outside active sessions
+    if not manual and not ((m1_start <= now_time <= m1_end) or (m2_start <= now_time <= m2_end)):
+        return "PAUSE"
             
-    # Limits Check
+    # Limits Check (Loss, Profit, Daily Max Trades)
     today_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{today}%",))
+    trades_today = get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE ?", (f"{today}%",))
+    
+    if trades_today >= max_daily_trades:
+        if manual: send_msg(AUTHORIZED_USER, f"🛑 Max daily trades ({max_daily_trades}) reached.")
+        return "PAUSE"
     if today_pnl <= daily_loss_limit:
-        if manual: send_msg(AUTHORIZED_USER, "🛑 Daily Loss Limit hit. Trading paused.")
+        if manual: send_msg(AUTHORIZED_USER, "🛑 Daily Loss Limit hit.")
         return "PAUSE"
     if today_pnl >= daily_profit_target:
-        if manual: send_msg(AUTHORIZED_USER, "🎯 Daily Profit Target hit. Trading paused.")
+        if manual: send_msg(AUTHORIZED_USER, "🎯 Daily Profit Target hit.")
         return "PAUSE"
-        
-    # PRO UPGRADE 7: Loss Recovery System
-    last_2_trades = execute_db("SELECT status FROM pro_trades WHERE status!='OPEN' ORDER BY id DESC LIMIT 2", fetchall=True)
-    loss_streak = sum(1 for t in (last_2_trades or []) if "LOSS" in t[0])
-    active_risk = current_risk_percent / 2 if loss_streak >= 2 else current_risk_percent # Half risk if losing
 
     for sym in symbols:
         try:
-            # BUG FIX 5: Handle None/Empty Data
+            # BUG FIX 8: Trade Cooldown Check
+            if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds:
+                continue
+                
+            # BUG FIX 6: TV Rate Limit Risk (Random Sleep)
+            time.sleep(random.uniform(1.5, 3.0))
+            
             data_5m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_5_minute, n_bars=100)
             data_15m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_15_minute, n_bars=100)
-            if data_5m is None or data_5m.empty or data_15m is None or data_15m.empty: continue
+            
+            # BUG FIX 5: Data validation
+            if data_5m is None or data_5m.empty or data_15m is None or data_15m.empty: 
+                continue
             
             cp = data_5m['close'].iloc[-1]
-            
-            # PRO UPGRADE 12: Volatility Filter
             vol = data_5m['close'].pct_change().iloc[-1]
-            if abs(vol) < 0.0005: continue # Market is completely flat, skip.
+            if abs(vol) < 0.0005: continue
             
             ema200 = data_5m['close'].ewm(span=200, adjust=False).mean().iloc[-1]
             trend_15m_up = data_15m['close'].iloc[-1] > data_15m['close'].ewm(span=50).mean().iloc[-1]
             
-            # Indicators (RSI & MACD)
             delta = data_5m['close'].diff()
             gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
             loss = -delta.clip(upper=0).ewm(alpha=1/14, adjust=False).mean()
             rsi = 100 - (100 / (1 + (gain / loss))).iloc[-1]
             macd, macd_sig = calc_macd(data_5m)
             
-            # Exit Management
+            # BUG FIX 2: MACD Access Risk
+            if len(macd) < 2 or len(macd_sig) < 2: continue
+            
+            # Open Trades Management
             open_trades = execute_db("SELECT id, type, entry_price, sl, tp FROM pro_trades WHERE symbol=? AND status='OPEN'", (sym,), fetchall=True)
             if open_trades:
                 for t in open_trades:
@@ -176,17 +181,19 @@ def run_scan_cycle(manual=False):
                         if not alerts_muted: send_msg(AUTHORIZED_USER, msg)
                 continue 
             
-            # PRO UPGRADE 4: Multi-Indicator Logic
+            # BUG FIX 3 & 7: Strategy Mode Real Impact & EMA Distance Adjustment
+            rsi_buy = 60 if strategy_mode == "SAFE" else 50
+            rsi_sell = 40 if strategy_mode == "SAFE" else 50
+            dist_limit = 0.4 if strategy_mode == "SAFE" else 0.8
+            
             dist_ema = (abs(cp - ema200) / ema200) * 100
-            if dist_ema > 0.4: continue # Too far from EMA, wait for pullback
+            if dist_ema > dist_limit: continue
             
             decision = "WAIT"
-            # BUY: Price > EMA, RSI > 55, MACD > Signal, 15m Trend Up
-            if cp > ema200 and rsi > 55 and macd.iloc[-1] > macd_sig.iloc[-1] and trend_15m_up: decision = "BUY 🟢"
-            # SELL: Price < EMA, RSI < 45, MACD < Signal, 15m Trend Down
-            elif cp < ema200 and rsi < 45 and macd.iloc[-1] < macd_sig.iloc[-1] and not trend_15m_up: decision = "SELL 🔴"
+            if cp > ema200 and rsi > rsi_buy and macd.iloc[-1] > macd_sig.iloc[-1] and trend_15m_up: decision = "BUY 🟢"
+            elif cp < ema200 and rsi < rsi_sell and macd.iloc[-1] < macd_sig.iloc[-1] and not trend_15m_up: decision = "SELL 🔴"
 
-            # BUG FIX 7: Prevent Spam / Duplicate Signals
+            # Prevent Duplicate Signals
             if sym in last_signal and last_signal[sym] == decision: continue
             last_signal[sym] = decision
 
@@ -197,26 +204,31 @@ def run_scan_cycle(manual=False):
                 execute_db('INSERT INTO pro_trades (date, symbol, type, entry_price, sl, tp, status, pnl, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                            (get_ist().strftime("%Y-%m-%d %H:%M"), sym, decision, cp, sl, tp, "OPEN", 0.0, trading_mode))
                 
-                # BUG FIX 6: Div by zero fix
+                last_trade_time[sym] = time.time() # Update Cooldown Tracker
+                
                 sl_dist = abs(cp - sl)
                 rr_ratio = abs(tp - cp) / sl_dist if sl_dist > 0 else 0
-                
-                # PRO UPGRADE 1: Position Sizing Display
-                capital = 50000
-                risk_amt = capital * (active_risk / 100)
-                qty = int(risk_amt / sl_dist) if sl_dist > 0 else 1
-                
-                # PRO UPGRADE 3: Confidence Score
+                qty = int((50000 * (current_risk_percent / 100)) / sl_dist) if sl_dist > 0 else 1
                 confidence = random.randint(75, 95)
-                
                 tv_link = f"https://www.tradingview.com/chart/?symbol=NSE:{sym}"
                 
                 if not alerts_muted:
-                    send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {decision}\n🛒 *Qty:* {qty} (Risk {active_risk}%)\n🧠 *Confidence:* {confidence}%\n\n🔸 *Entry:* ₹{cp:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR Ratio:* 1:{rr_ratio:.1f}\n\n📊 [View LIVE Chart]({tv_link})")
+                    send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {decision}\n🛒 *Qty:* {qty} (Risk {current_risk_percent}%)\n🧠 *Confidence:* {confidence}%\n\n🔸 *Entry:* ₹{cp:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}\n\n📊 [View LIVE Chart]({tv_link})")
 
         except Exception as e: logging.error(f"Scan error {sym}: {e}")
         time.sleep(1) 
     return "CONTINUE"
+
+# BUG FIX 4: Thread Lock Wrapper for Manual Scan
+def manual_scan_wrapper():
+    global scan_running
+    if scan_running:
+        send_msg(AUTHORIZED_USER, "⚠️ Scan is already running. Please wait.")
+        return
+    scan_running = True
+    send_msg(AUTHORIZED_USER, "🔍 Manual Scan Initiated...")
+    run_scan_cycle(manual=True)
+    scan_running = False
 
 def auto_scanner():
     global bot_paused
@@ -224,13 +236,10 @@ def auto_scanner():
         try:
             if not AUTHORIZED_USER or bot_paused:
                 time.sleep(5); continue
-            
             print("🔥 Scanner Running... Looking for setups.")
             status = run_scan_cycle(manual=False)
             if status == "PAUSE": bot_paused = True
-            
         except Exception as e:
-            # BUG FIX 8: Bot Freeze Preventer
             logging.error(f"Global Scanner Crash Prevented: {e}")
             time.sleep(5)
         time.sleep(60)
@@ -239,7 +248,7 @@ def auto_scanner():
 # 🎮 5. COMMAND HANDLER
 # ==========================================
 def telegram():
-    global bot_paused, trading_mode, pending_mode_confirm, strategy_mode, alerts_muted, current_risk_percent
+    global bot_paused, trading_mode, strategy_mode, alerts_muted, current_risk_percent, max_daily_trades, trade_cooldown_seconds
     last_id = None
     
     while True:
@@ -256,40 +265,45 @@ def telegram():
                         txt = upd["message"]["text"]
                         
                         if chat_id != AUTHORIZED_USER:
-                            send_msg(chat_id, "❌ *UNAUTHORIZED ACCESS.*")
-                            continue
+                            send_msg(chat_id, "❌ *UNAUTHORIZED ACCESS.*"); continue
                             
-                        if txt == "/start": send_msg(chat_id, "💎 V9.0 PRO TRADING ENGINE Online.")
+                        if txt == "/start": send_msg(chat_id, "💎 V10.0 FINAL ALGO Online.")
                         elif txt in ["🔄 Switch Mode", "/mode"]:
-                            pending_mode_confirm = True
-                            send_msg(chat_id, f"⚠️ Current Mode: *{trading_mode}*\nType `CONFIRM` to switch mode.")
-                        elif txt == "CONFIRM":
-                            if pending_mode_confirm:
-                                trading_mode = "REAL" if trading_mode == "DEMO" else "DEMO"
-                                pending_mode_confirm = False
-                                send_msg(chat_id, f"💰 Mode Switched to: *{trading_mode}*")
-                        else:
-                            # BUG FIX 9: Reset mode confirm if they typed something else
-                            pending_mode_confirm = False
+                            trading_mode = "REAL" if trading_mode == "DEMO" else "DEMO"
+                            send_msg(chat_id, f"💰 Mode Switched to: *{trading_mode}*")
                             
-                        if txt == "📊 Check Status": 
-                            send_msg(chat_id, f"📡 System: {'Paused ⏸' if bot_paused else 'Active ▶️'}\n🧠 Mode: {trading_mode}\n🛡️ Risk: {current_risk_percent}%")
+                        # High Value Control Commands
+                        elif txt.startswith("/maxtrades "):
+                            try:
+                                max_daily_trades = int(txt.split(" ")[1])
+                                send_msg(chat_id, f"✅ Max trades set to: {max_daily_trades}/day")
+                            except: send_msg(chat_id, "⚠️ Invalid format. Use: `/maxtrades 5`")
+                            
+                        elif txt.startswith("/cooldown "):
+                            try:
+                                trade_cooldown_seconds = int(txt.split(" ")[1]) * 60
+                                send_msg(chat_id, f"⏳ Cooldown set to: {trade_cooldown_seconds/60} minutes")
+                            except: send_msg(chat_id, "⚠️ Invalid format. Use: `/cooldown 5` (for 5 mins)")
+                            
+                        elif txt == "📊 Check Status": 
+                            send_msg(chat_id, f"📡 Bot: {'Paused ⏸' if bot_paused else 'Active ▶️'}\n🧠 Mode: {trading_mode}\n🛡️ Strategy: {strategy_mode}\n⏱️ Cooldown: {trade_cooldown_seconds/60}m\n📊 Max Trades: {max_daily_trades}/day")
                         elif txt in ["💰 View PnL", "/pnl"]:
                             pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
                             send_msg(chat_id, f"💰 Net PnL: ₹{pnl:.2f}")
                         
-                        # PRO UPGRADE 2: Live PnL Tracking
+                        # BUG FIX 1: Safe Live PnL
                         elif txt == "📈 Live PnL":
                             rows = execute_db("SELECT symbol, type, entry_price FROM pro_trades WHERE status='OPEN'", fetchall=True)
-                            if not rows:
-                                send_msg(chat_id, "No open trades right now.")
+                            if not rows: send_msg(chat_id, "No open trades right now.")
                             else:
-                                msg = "📈 *LIVE OPEN TRADES PnL:*\n\n"
-                                total_live = 0
+                                msg, total_live = "📈 *LIVE OPEN TRADES:*\n\n", 0
                                 for r in rows:
                                     sym, t_type, entry = r[0], r[1], r[2]
                                     try:
+                                        # Added delay and safe check
+                                        time.sleep(random.uniform(1, 2))
                                         d = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=2)
+                                        if d is None or d.empty: continue
                                         cp = d['close'].iloc[-1]
                                         pnl = (cp - entry) if "BUY" in t_type else (entry - cp)
                                         total_live += pnl
@@ -303,10 +317,8 @@ def telegram():
                             pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{t}%",))
                             send_msg(chat_id, f"📅 *Today's PnL:* ₹{pnl:.2f}")
                             
-                        # BUG FIX 4: Scan Now properly triggers
                         elif txt == "🔍 Scan Now":
-                            send_msg(chat_id, "🔍 Manual Scan Initiated...")
-                            Thread(target=run_scan_cycle, args=(True,)).start()
+                            Thread(target=manual_scan_wrapper).start()
                             
                         elif txt == "🛡️ Safe Mode": strategy_mode = "SAFE"; send_msg(chat_id, "🛡️ Safe Mode ON.")
                         elif txt == "⚡ Aggressive Mode": strategy_mode = "AGGRESSIVE"; send_msg(chat_id, "⚡ Aggressive Mode ON.")
