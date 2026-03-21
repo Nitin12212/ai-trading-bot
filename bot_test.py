@@ -52,7 +52,7 @@ HTML_TEMPLATE = """
     <div class="max-w-md mx-auto">
         <div class="flex justify-between items-center mb-6">
             <div>
-                <h1 class="text-2xl font-bold text-emerald-400">V15.0 Visual Engine</h1>
+                <h1 class="text-2xl font-bold text-emerald-400">V16.0 Holy Grail</h1>
                 <p class="text-xs text-slate-400">Live Algo Performance</p>
             </div>
             <div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">
@@ -79,16 +79,12 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <h2 class="text-lg font-bold text-slate-300 mb-3 flex items-center">
-            <span class="mr-2">📈</span> Equity Curve
-        </h2>
+        <h2 class="text-lg font-bold text-slate-300 mb-3 flex items-center"><span class="mr-2">📈</span> Equity Curve</h2>
         <div class="glass-card p-4 rounded-xl mb-6">
             <canvas id="equityChart" height="200"></canvas>
         </div>
 
-        <h2 class="text-lg font-bold text-slate-300 mb-3 flex items-center">
-            <span class="mr-2">⚡</span> Live Open Trades
-        </h2>
+        <h2 class="text-lg font-bold text-slate-300 mb-3 flex items-center"><span class="mr-2">⚡</span> Live Open Trades</h2>
         <div id="open-trades-container" class="space-y-3">
             <div class="text-center text-slate-500 text-sm py-4">Loading trades...</div>
         </div>
@@ -113,7 +109,6 @@ HTML_TEMPLATE = """
                 });
 
                 const ctx = document.getElementById('equityChart').getContext('2d');
-                
                 if(equityChartInstance) {
                     equityChartInstance.data.labels = labels;
                     equityChartInstance.data.datasets[0].data = dataPoints;
@@ -126,13 +121,8 @@ HTML_TEMPLATE = """
                             datasets: [{
                                 label: 'Capital (₹)',
                                 data: dataPoints,
-                                borderColor: '#34d399',
-                                backgroundColor: 'rgba(52, 211, 153, 0.1)',
-                                borderWidth: 2,
-                                fill: true,
-                                tension: 0.3,
-                                pointRadius: 2,
-                                pointBackgroundColor: '#fff'
+                                borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)',
+                                borderWidth: 2, fill: true, tension: 0.3, pointRadius: 2, pointBackgroundColor: '#fff'
                             }]
                         },
                         options: {
@@ -140,10 +130,7 @@ HTML_TEMPLATE = """
                             plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
                             scales: {
                                 x: { display: false },
-                                y: { 
-                                    ticks: { color: '#94a3b8', callback: function(value) { return '₹' + (value/1000) + 'k'; } },
-                                    grid: { color: 'rgba(255, 255, 255, 0.05)' }
-                                }
+                                y: { ticks: { color: '#94a3b8', callback: function(value) { return '₹' + (value/1000) + 'k'; } }, grid: { color: 'rgba(255, 255, 255, 0.05)' } }
                             }
                         }
                     });
@@ -178,15 +165,16 @@ HTML_TEMPLATE = """
                     let html = '';
                     data.open_trades.forEach(t => {
                         const typeColor = t[1].includes('BUY') ? 'text-emerald-400' : 'text-rose-400';
+                        const partialTag = t[5] ? '<span class="ml-2 text-[10px] bg-blue-500/20 text-blue-400 px-1 rounded">50% BOOKED</span>' : '';
                         html += `
                         <div class="glass-card p-4 rounded-xl flex justify-between items-center">
                             <div>
-                                <p class="font-bold text-white">${t[0]}</p>
+                                <p class="font-bold text-white">${t[0]} ${partialTag}</p>
                                 <p class="text-xs text-slate-400">Entry: ₹${t[2].toFixed(2)} | SL: ₹${t[4].toFixed(2)}</p>
                             </div>
                             <div class="text-right">
                                 <p class="font-bold ${typeColor}">${t[1]}</p>
-                                <p class="text-xs text-slate-400">Mode: ${t[3]}</p>
+                                <p class="text-xs text-slate-400">Qty: ${t[6]} | Mode: ${t[3]}</p>
                             </div>
                         </div>`;
                     });
@@ -195,10 +183,8 @@ HTML_TEMPLATE = """
             } catch (e) { console.error("Error fetching stats", e); }
         }
 
-        fetchStats();
-        fetchEquityData();
-        setInterval(fetchStats, 5000);
-        setInterval(fetchEquityData, 10000);
+        fetchStats(); fetchEquityData();
+        setInterval(fetchStats, 5000); setInterval(fetchEquityData, 10000);
     </script>
 </body>
 </html>
@@ -213,17 +199,15 @@ def api_stats():
     pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'") or 0.0
     total = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status!='OPEN'") or 0)
     wins = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status='PROFIT ✅'") or 0)
-    open_trades = execute_db("SELECT symbol, type, entry_price, mode, sl FROM pro_trades WHERE status='OPEN'", fetchall=True) or []
+    # Passed partial_exit and qty to UI
+    open_trades = execute_db("SELECT symbol, type, entry_price, mode, sl, partial_exit, qty FROM pro_trades WHERE status='OPEN'", fetchall=True) or []
     win_rate = (wins / total * 100) if total > 0 else 0
-    
-    return jsonify({
-        "pnl": pnl, "win_rate": win_rate, "total_trades": total,
-        "open_trades": open_trades, "mode": trading_mode, "paused": bot_paused
-    })
+    return jsonify({"pnl": pnl, "win_rate": win_rate, "total_trades": total, "open_trades": open_trades, "mode": trading_mode, "paused": bot_paused})
 
+# BUG FIX 1: Sort by Timestamp (date_ts) to fix Equity Curve Order
 @app.route('/api/equity')
 def api_equity():
-    data = execute_db("SELECT date, pnl FROM pro_trades WHERE status!='OPEN'", fetchall=True) or []
+    data = execute_db("SELECT date, pnl FROM pro_trades WHERE status!='OPEN' ORDER BY date_ts ASC", fetchall=True) or []
     return jsonify([{"date": r[0], "pnl": r[1]} for r in data])
 
 def run_server():
@@ -238,10 +222,12 @@ alerts_muted = False
 current_risk_percent = 2.0
 daily_loss_limit = -2000.0
 daily_profit_target = 3000.0
+global_drawdown_limit = -5000.0 # BUG FIX 5: Maximum Drawdown Safety
 max_daily_trades = 5          
 trade_cooldown_seconds = 300  
 last_trade_time = {}          
 last_signal = {}              
+pending_mode_confirm = False  
 
 def get_tv():
     for _ in range(3):
@@ -253,7 +239,7 @@ def get_tv():
 tv = get_tv()
 
 # ==========================================
-# 🗄️ 3. SAFE DATABASE ENGINE
+# 🗄️ 3. SAFE DATABASE ENGINE & MIGRATION
 # ==========================================
 def execute_db(query, params=(), fetch=False, fetchall=False):
     with db_lock:
@@ -276,8 +262,16 @@ def get_val(query, params=()):
 
 def setup_db():
     execute_db('''CREATE TABLE IF NOT EXISTS pro_trades 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, symbol TEXT, type TEXT, 
-                  entry_price REAL, sl REAL, tp REAL, status TEXT, pnl REAL, mode TEXT)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, date_ts INTEGER, symbol TEXT, type TEXT, 
+                  entry_price REAL, sl REAL, tp REAL, status TEXT, pnl REAL, mode TEXT, partial_exit INTEGER DEFAULT 0, qty INTEGER DEFAULT 0)''')
+    
+    # Safe DB Upgrade if table exists without new columns
+    try: execute_db("ALTER TABLE pro_trades ADD COLUMN date_ts INTEGER")
+    except: pass
+    try: execute_db("ALTER TABLE pro_trades ADD COLUMN partial_exit INTEGER DEFAULT 0")
+    except: pass
+    try: execute_db("ALTER TABLE pro_trades ADD COLUMN qty INTEGER DEFAULT 0")
+    except: pass
 
 def get_ist(): return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
@@ -287,8 +281,6 @@ def get_ist(): return datetime.utcnow() + timedelta(hours=5, minutes=30)
 def send_msg(chat_id, text):
     if not TOKEN or not chat_id: return
     url = f"{BASE_URL}/sendMessage"
-    
-    # 🌟 NEW TELEGRAM KEYBOARD WITH DASHBOARD BUTTON
     keyboard = {
         "keyboard": [
             [{"text": "📊 Check Status"}, {"text": "📅 Today Report"}],
@@ -304,8 +296,7 @@ def send_msg(chat_id, text):
         try:
             requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "reply_markup": keyboard, "disable_web_page_preview": True}, timeout=5)
             return
-        except Exception as e:
-            time.sleep(2)
+        except: time.sleep(2)
 
 def place_real_order(symbol, side, price, sl, tp, qty):
     try:
@@ -335,9 +326,14 @@ def run_scan_cycle(manual=False):
     if not manual and not ((m1_start <= now_time <= m1_end) or (m2_start <= now_time <= m2_end)):
         return "SKIP" 
             
+    total_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
     today_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE ? AND status!='OPEN'", (f"{today}%",))
     trades_today = get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE ?", (f"{today}%",))
     
+    # BUG FIX 5: Global Drawdown Protection
+    if total_pnl <= global_drawdown_limit:
+        if manual: send_msg(AUTHORIZED_USER, "🚨 MAX DRAWDOWN HIT. BOT STOPPED.")
+        return "PAUSE"
     if trades_today >= max_daily_trades:
         if manual: send_msg(AUTHORIZED_USER, f"🛑 Max daily trades ({max_daily_trades}) reached.")
         return "SKIP"
@@ -379,12 +375,26 @@ def run_scan_cycle(manual=False):
             macd, macd_sig = calc_macd(data_5m)
             if len(macd) < 2 or len(macd_sig) < 2: continue
             
-            open_trades = execute_db("SELECT id, type, entry_price, sl, tp FROM pro_trades WHERE symbol=? AND status='OPEN'", (sym,), fetchall=True)
+            open_trades = execute_db("SELECT id, type, entry_price, sl, tp, pnl, partial_exit, qty FROM pro_trades WHERE symbol=? AND status='OPEN'", (sym,), fetchall=True)
             if open_trades:
                 for t in open_trades:
-                    t_id, t_type, entry, sl, tp = t
-                    status, pnl, msg = "OPEN", 0.0, None
+                    t_id, t_type, entry, sl, tp, current_pnl, partial_exit, qty = t
+                    status, pnl, msg = "OPEN", current_pnl, None
                     
+                    pts_captured = (cp - entry) if "BUY" in t_type else (entry - cp)
+                    
+                    # BUG FIX 3: 50% PARTIAL SCALING LOGIC
+                    half_target = entry + (tp - entry)/2 if "BUY" in t_type else entry - (entry - tp)/2
+                    is_half_hit = (cp >= half_target) if "BUY" in t_type else (cp <= half_target)
+                    
+                    if not partial_exit and is_half_hit:
+                        locked_pnl = pts_captured * (qty / 2)
+                        execute_db("UPDATE pro_trades SET partial_exit=1, pnl=?, sl=? WHERE id=?", (locked_pnl, entry, t_id))
+                        sl = entry # Update local SL
+                        if not alerts_muted: send_msg(AUTHORIZED_USER, f"🎯 *PARTIAL BOOKED (50%)*: {sym}\n💰 Locked: ₹{locked_pnl:.2f}\n🛡️ SL moved to Entry.")
+                        continue # Continue trade with remaining qty
+
+                    # Trailing SL (Locks more profit if price moves further)
                     if t_type == "BUY 🟢" and cp > entry:
                         new_sl = max(sl, cp - (cp * 0.001))
                         if new_sl > sl: execute_db("UPDATE pro_trades SET sl=? WHERE id=?", (new_sl, t_id)); sl = new_sl
@@ -393,12 +403,14 @@ def run_scan_cycle(manual=False):
                         new_sl = min(sl, cp + (cp * 0.001))
                         if new_sl < sl: execute_db("UPDATE pro_trades SET sl=? WHERE id=?", (new_sl, t_id)); sl = new_sl
 
+                    # Final Exit Condition
+                    remaining_qty = (qty / 2) if partial_exit else qty
                     if t_type == "BUY 🟢":
-                        if cp >= tp: status, pnl, msg = "PROFIT ✅", tp - entry, f"🎯 TARGET HIT: {sym} (+₹{tp - entry:.2f})"
-                        elif cp <= sl: status, pnl, msg = "LOSS ❌", sl - entry, f"🛑 SL HIT: {sym} (Exit: ₹{cp:.2f})"
+                        if cp >= tp: status, pnl, msg = "PROFIT ✅", current_pnl + (abs(tp - entry) * remaining_qty), f"🎯 TARGET HIT: {sym} (+₹{(abs(tp - entry) * remaining_qty):.2f})"
+                        elif cp <= sl: status, pnl, msg = "LOSS ❌", current_pnl - (abs(entry - cp) * remaining_qty), f"🛑 SL HIT: {sym} (Exit: ₹{cp:.2f})"
                     elif t_type == "SELL 🔴":
-                        if cp <= tp: status, pnl, msg = "PROFIT ✅", entry - tp, f"🎯 TARGET HIT: {sym} (+₹{entry - tp:.2f})"
-                        elif cp >= sl: status, pnl, msg = "LOSS ❌", entry - sl, f"🛑 SL HIT: {sym} (Exit: ₹{cp:.2f})"
+                        if cp <= tp: status, pnl, msg = "PROFIT ✅", current_pnl + (abs(entry - tp) * remaining_qty), f"🎯 TARGET HIT: {sym} (+₹{(abs(entry - tp) * remaining_qty):.2f})"
+                        elif cp >= sl: status, pnl, msg = "LOSS ❌", current_pnl - (abs(sl - entry) * remaining_qty), f"🛑 SL HIT: {sym} (Exit: ₹{cp:.2f})"
                     
                     if status != "OPEN":
                         execute_db("UPDATE pro_trades SET status=?, pnl=? WHERE id=?", (status, pnl, t_id))
@@ -420,30 +432,33 @@ def run_scan_cycle(manual=False):
             last_signal[sym] = decision
 
             if decision != "WAIT":
-                sl = cp - (cp * 0.002) if "BUY" in decision else cp + (cp * 0.002)
-                tp = cp + (cp * 0.005) if "BUY" in decision else cp - (cp * 0.005)
+                # BUG FIX 4: SLIPPAGE SIMULATION (0.05%)
+                slippage = cp * 0.0005
+                exec_price = cp + slippage if "BUY" in decision else cp - slippage
                 
-                total_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
+                sl = exec_price - (exec_price * 0.002) if "BUY" in decision else exec_price + (exec_price * 0.002)
+                tp = exec_price + (exec_price * 0.005) if "BUY" in decision else exec_price - (exec_price * 0.005)
+                
                 dynamic_capital = max(50000, 50000 + total_pnl)
-                
-                sl_dist = abs(cp - sl)
+                sl_dist = abs(exec_price - sl)
                 risk_amt = dynamic_capital * (current_risk_percent / 100)
-                qty = min(100, int(risk_amt / sl_dist)) if sl_dist > 0 else 1
+                qty = min(100, max(1, int(risk_amt / sl_dist))) if sl_dist > 0 else 1
                 
                 order_success = True
                 if trading_mode == "REAL":
-                    order_success = place_real_order(sym, decision, cp, sl, tp, qty)
+                    order_success = place_real_order(sym, decision, exec_price, sl, tp, qty)
                 
                 if order_success:
-                    execute_db('INSERT INTO pro_trades (date, symbol, type, entry_price, sl, tp, status, pnl, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                               (get_ist().strftime("%Y-%m-%d %H:%M"), sym, decision, cp, sl, tp, "OPEN", 0.0, trading_mode))
+                    ts = int(time.time())
+                    execute_db('INSERT INTO pro_trades (date, date_ts, symbol, type, entry_price, sl, tp, status, pnl, mode, qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               (get_ist().strftime("%Y-%m-%d %H:%M"), ts, sym, decision, exec_price, sl, tp, "OPEN", 0.0, trading_mode, qty))
                     last_trade_time[sym] = time.time()
                     
-                    rr_ratio = abs(tp - cp) / sl_dist if sl_dist > 0 else 0
+                    rr_ratio = abs(tp - exec_price) / sl_dist if sl_dist > 0 else 0
                     tv_link = f"https://www.tradingview.com/chart/?symbol=NSE:{sym}"
                     
                     if not alerts_muted:
-                        send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {decision}\n🛒 *Qty:* {qty} (Risk {current_risk_percent}% of ₹{dynamic_capital:,.0f})\n\n🔸 *Entry:* ₹{cp:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}\n\n📊 [View LIVE Chart]({tv_link})")
+                        send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {decision}\n🛒 *Qty:* {qty} (Risk {current_risk_percent}% of ₹{dynamic_capital:,.0f})\n\n🔸 *Entry:* ₹{exec_price:.2f} (Slip Inc.)\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}\n\n📊 [View LIVE Chart]({tv_link})")
 
         except Exception as e: logging.error(f"Scan error {sym}: {e}")
         time.sleep(1) 
@@ -518,15 +533,12 @@ def telegram():
                         if chat_id != AUTHORIZED_USER:
                             send_msg(chat_id, "❌ *UNAUTHORIZED ACCESS.*"); continue
                             
-                        if txt == "/start": send_msg(chat_id, "💎 V15.0 ENGINE Online. Web UI & Telegram Sync Complete.")
+                        if txt == "/start": send_msg(chat_id, "💎 V16.0 HOLY GRAIL Online. Scaled Exits & Slippage Active.")
                         
-                        # 🌐 NAYA BUTTON: OPEN DASHBOARD
                         elif txt == "🌐 Open Dashboard":
                             dash_url = "https://ai-trading-bot-itc0.onrender.com"
-                            # Telegram ka special "Inline Button" jo browser direct kholta hai
                             inline_keyboard = {"inline_keyboard": [[{"text": "🚀 Open Web Dashboard", "url": dash_url}]]}
-                            try:
-                                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "Click below to view your Live PnL Graph:", "reply_markup": inline_keyboard})
+                            try: requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "Click below to view your Live PnL Graph:", "reply_markup": inline_keyboard})
                             except: pass
                             
                         elif txt in ["🔄 Switch Mode", "/mode"]:
@@ -544,18 +556,19 @@ def telegram():
                             pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
                             send_msg(chat_id, f"💰 Net PnL: ₹{pnl:.2f}")
                         elif txt == "📈 Live PnL":
-                            rows = execute_db("SELECT symbol, type, entry_price FROM pro_trades WHERE status='OPEN'", fetchall=True)
+                            rows = execute_db("SELECT symbol, type, entry_price, qty FROM pro_trades WHERE status='OPEN'", fetchall=True)
                             if not rows: send_msg(chat_id, "No open trades right now.")
                             else:
                                 msg, total_live = "📈 *LIVE OPEN TRADES:*\n\n", 0
                                 for r in rows:
-                                    sym, t_type, entry = r[0], r[1], r[2]
+                                    sym, t_type, entry, qty = r[0], r[1], r[2], r[3]
                                     try:
                                         time.sleep(random.uniform(1, 2))
                                         d = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=2)
                                         if d is None or d.empty: continue
                                         cp = d['close'].iloc[-1]
-                                        pnl = (cp - entry) if "BUY" in t_type else (entry - cp)
+                                        pts = (cp - entry) if "BUY" in t_type else (entry - cp)
+                                        pnl = pts * qty
                                         total_live += pnl
                                         msg += f"🔹 {sym}: ₹{pnl:.2f}\n"
                                     except: pass
