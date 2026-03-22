@@ -359,7 +359,6 @@ def is_news_time():
         return False
     except: return False
 
-# 🔥 V26.1: Real + Free-Fallback Finnhub Sentiment
 def get_sentiment(sym):
     try:
         api_key = os.getenv("FINNHUB_API_KEY")
@@ -443,6 +442,7 @@ def process_single_symbol(sym):
     volume_avg = data_5m['volume'].rolling(20).mean().iloc[-1]
     if data_5m['volume'].iloc[-1] < volume_avg: return 
 
+    # 🛠️ FIX: ATR Scoped correctly before Open Trades loop
     atr = (data_5m['high'] - data_5m['low']).rolling(14).mean().iloc[-1]
     if (atr / cp) < 0.001: return 
     
@@ -703,7 +703,7 @@ def auto_scanner():
 def process_command(chat_id, txt):
     global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
     
-    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.1 God Mode Engine Online.")
+    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.2 Flawless Engine Online.")
     elif txt == "🎛️ Active Markets":
         curr_syms = ", ".join(active_symbols) if active_symbols else "None"
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
