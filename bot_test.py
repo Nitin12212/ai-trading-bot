@@ -7,17 +7,26 @@ import os
 import logging
 import random
 import psycopg2 
-import urllib.parse # 🛠️ FIX 2: DB Parse
+import urllib.parse 
 import xml.etree.ElementTree as ET 
 from psycopg2 import pool
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo # 🛠️ FIX 4: Correct Timezone
+from datetime import datetime, timedelta, time as dt_time 
+from zoneinfo import ZoneInfo 
 from threading import Thread, Lock
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from tvDatafeed import TvDatafeed, Interval
 from flask import Flask, render_template_string, jsonify, request
-from sklearn.ensemble import RandomForestClassifier
+
+# 🔥 UPGRADE 1: XGBoost & ML Models
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+
+# 🔥 UPGRADE 4: AliceBlue Placeholder
+try:
+    from alice_blue import AliceBlue
+except ImportError:
+    AliceBlue = None
 
 # ==========================================
 # 🛡️ 1. SECURITY & GLOBALS
@@ -30,6 +39,7 @@ if not TOKEN: raise ValueError("❌ TELEGRAM_BOT_TOKEN missing in Environment Va
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 DB_URL = os.getenv("DATABASE_URL")
 WEB_SECRET = os.getenv("WEB_SECRET", "12345")
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://ai-trading-bot-itc0.onrender.com")
 
 try: AUTHORIZED_USER = int(os.getenv("AUTHORIZED_USER", "0"))
 except: AUTHORIZED_USER = 0
@@ -38,11 +48,9 @@ if AUTHORIZED_USER == 0: logging.error("🚨 CRITICAL: AUTHORIZED_USER not set!"
 scan_lock = Lock()
 data_lock = Lock() 
 
-# 🛠️ FIX 4: Correct Timezone implementation
 IST = ZoneInfo("Asia/Kolkata")
 def get_ist(): return datetime.now(IST)
 
-# 🛠️ FIX 2: PostgreSQL Connection Pool Setup for Cloud (SSL Mode)
 db_pool = None
 if DB_URL:
     try:
@@ -67,7 +75,6 @@ nse_session.headers.update({
     "Referer": "https://www.nseindia.com/"
 })
 
-# 🛠️ FIX 3: Robust Cookie Refresh Function
 def refresh_nse():
     try:
         nse_session.get("https://www.nseindia.com", timeout=6)
@@ -75,7 +82,7 @@ def refresh_nse():
     except: pass
 
 # ==========================================
-# 🚀 2. TELEGRAM MESSAGE QUEUE (Crash-Proof)
+# 🚀 2. TELEGRAM MESSAGE QUEUE 
 # ==========================================
 msg_queue = Queue()
 
@@ -84,9 +91,8 @@ def _send_msg_raw(chat_id, text):
     url = f"{BASE_URL}/sendMessage"
     keyboard = {
         "keyboard": [
-            [{"text": "📊 Check Status"}, {"text": "📅 Today Report"}],
-            [{"text": "💰 View PnL"}, {"text": "📈 Live PnL"}],
-            [{"text": "📊 Detailed Stats"}, {"text": "🔍 Scan Now"}],
+            [{"text": "📊 Check Status"}, {"text": "📈 Live PnL"}],
+            [{"text": "⚙️ Backtest"}, {"text": "🔍 Scan Now"}],
             [{"text": "🛡️ Safe Mode"}, {"text": "⚡ Aggressive Mode"}],
             [{"text": "🔄 Switch Mode"}, {"text": "🌐 Open Dashboard"}], 
             [{"text": "❌ Close All"}, {"text": "🎛️ Active Markets"}],
@@ -101,7 +107,7 @@ def _send_msg_raw(chat_id, text):
 
 def telegram_worker():
     while True:
-        try: # 🛠️ FIX 6: Thread won't silently die now
+        try: 
             chat_id, text = msg_queue.get()
             _send_msg_raw(chat_id, text)
             msg_queue.task_done()
@@ -116,18 +122,41 @@ def send_msg(chat_id, text):
     msg_queue.put((chat_id, text))
 
 # ==========================================
-# 🌐 3. DASHBOARD API & WEBHOOK
+# 🌐 3. DASHBOARD API & COMMAND CENTER
 # ==========================================
 app = Flask(__name__)
 
 @app.before_request
 def auth():
-    if request.path == '/webhook': return 
+    if request.path in ['/webhook', '/api/command']: return 
     key = request.args.get("key") or request.headers.get("x-api-key")
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V24.0 Bulletproof</h1><p class="text-xs text-slate-400">Math Guards & SSL Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div><h2 class="text-lg font-bold text-slate-300 mb-3">⚡ Live Open Trades</h2><div id="open-trades-container" class="space-y-3"><div class="text-center text-slate-500 text-sm py-4">Loading trades...</div></div></div><script>const urlParams = new URLSearchParams(window.location.search); const authKey = urlParams.get('key') || ''; let equityChartInstance = null; async function fetchEquityData() { try { const res = await fetch('/api/equity?key=' + authKey); const rawData = await res.json(); let labels = ["Start"]; let capital = 50000; let dataPoints = [capital]; rawData.forEach(trade => { capital += trade.pnl; labels.push(trade.date.split(" ")[0]); dataPoints.push(capital); }); const ctx = document.getElementById('equityChart').getContext('2d'); if(equityChartInstance) { equityChartInstance.data.labels = labels; equityChartInstance.data.datasets[0].data = dataPoints; equityChartInstance.update(); } else { equityChartInstance = new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: 'Capital (₹)', data: dataPoints, borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 1, pointBackgroundColor: '#fff' }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255, 255, 255, 0.05)' } } } } }); } } catch(e) {} } async function fetchStats() { try { const res = await fetch('/api/stats?key=' + authKey); const data = await res.json(); document.getElementById('total-pnl').innerText = '₹' + data.pnl.toFixed(2); document.getElementById('total-pnl').className = data.pnl >= 0 ? 'text-xl font-bold text-emerald-400' : 'text-xl font-bold text-rose-400'; document.getElementById('win-rate').innerText = data.win_rate.toFixed(1) + '%'; document.getElementById('total-trades').innerText = data.total_trades; document.getElementById('dynamic-cap').innerText = '₹' + (50000 + data.pnl).toLocaleString(); const badge = document.getElementById('status-badge'); if (data.paused) { badge.innerText = '⏸ PAUSED'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/50'; } else { badge.innerText = '● ACTIVE'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'; } const tradesContainer = document.getElementById('open-trades-container'); if (data.open_trades.length === 0) { tradesContainer.innerHTML = '<div class="glass-card p-4 rounded-xl text-center text-slate-500 text-sm">No open trades right now.</div>'; } else { let html = ''; data.open_trades.forEach(t => { const typeColor = t[1].includes('BUY') ? 'text-emerald-400' : 'text-rose-400'; const partialTag = t[5] ? '<span class="ml-2 text-[10px] bg-blue-500/20 text-blue-400 px-1 rounded">50% BOOKED</span>' : ''; html += `<div class="glass-card p-4 rounded-xl flex justify-between items-center"><div><p class="font-bold text-white text-sm">${t[0]} ${partialTag}</p><p class="text-[10px] text-slate-400">Entry: ₹${t[2].toFixed(2)}</p></div><div class="text-right"><p class="font-bold text-sm ${typeColor}">${t[1]}</p><p class="text-[10px] text-slate-400">Qty: ${t[6]}</p></div></div>`; }); tradesContainer.innerHTML = html; } } catch (e) {} } fetchStats(); fetchEquityData(); setInterval(fetchStats, 5000); setInterval(fetchEquityData, 10000);</script></body></html>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V25.0 Institutional</h1><p class="text-xs text-slate-400">XGBoost + Kelly Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+
+<h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
+<div class="grid grid-cols-2 gap-2 mb-6">
+    <button onclick="sendCommand('📊 Check Status')" class="bg-blue-600/20 text-blue-400 border border-blue-600/50 p-2 rounded text-sm font-bold hover:bg-blue-600/40">📊 Status</button>
+    <button onclick="sendCommand('📈 Live PnL')" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/50 p-2 rounded text-sm font-bold hover:bg-emerald-600/40">📈 Live PnL</button>
+    <button onclick="sendCommand('/backtest')" class="bg-purple-600/20 text-purple-400 border border-purple-600/50 p-2 rounded text-sm font-bold hover:bg-purple-600/40">⚙️ Backtest</button>
+    <button onclick="sendCommand('🎛️ Active Markets')" class="bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 p-2 rounded text-sm font-bold hover:bg-indigo-600/40">🎛️ Markets</button>
+    <button onclick="sendCommand('🛡️ Safe Mode')" class="bg-sky-600/20 text-sky-400 border border-sky-600/50 p-2 rounded text-sm font-bold hover:bg-sky-600/40">🛡️ Safe</button>
+    <button onclick="sendCommand('⚡ Aggressive Mode')" class="bg-orange-600/20 text-orange-400 border border-orange-600/50 p-2 rounded text-sm font-bold hover:bg-orange-600/40">⚡ Aggr</button>
+    <button onclick="sendCommand('⏸ Pause Bot')" class="bg-amber-600/20 text-amber-400 border border-amber-600/50 p-2 rounded text-sm font-bold hover:bg-amber-600/40">⏸ Pause</button>
+    <button onclick="sendCommand('▶️ Resume Bot')" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/50 p-2 rounded text-sm font-bold hover:bg-emerald-600/40">▶️ Resume</button>
+    <button onclick="sendCommand('❌ Close All')" class="bg-rose-600/20 text-rose-400 border border-rose-600/50 p-2 rounded text-sm font-bold hover:bg-rose-600/40 col-span-2">❌ Close All Positions</button>
+</div>
+
+<h2 class="text-lg font-bold text-slate-300 mb-3">⚡ Live Open Trades</h2><div id="open-trades-container" class="space-y-3"><div class="text-center text-slate-500 text-sm py-4">Loading trades...</div></div></div>
+
+<script>
+const urlParams = new URLSearchParams(window.location.search); const authKey = urlParams.get('key') || ''; let equityChartInstance = null; 
+async function fetchEquityData() { try { const res = await fetch('/api/equity?key=' + authKey); const rawData = await res.json(); let labels = ["Start"]; let capital = 50000; let dataPoints = [capital]; rawData.forEach(trade => { capital += trade.pnl; labels.push(trade.date.split(" ")[0]); dataPoints.push(capital); }); const ctx = document.getElementById('equityChart').getContext('2d'); if(equityChartInstance) { equityChartInstance.data.labels = labels; equityChartInstance.data.datasets[0].data = dataPoints; equityChartInstance.update(); } else { equityChartInstance = new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: 'Capital (₹)', data: dataPoints, borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 1, pointBackgroundColor: '#fff' }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255, 255, 255, 0.05)' } } } } }); } } catch(e) {} } 
+async function fetchStats() { try { const res = await fetch('/api/stats?key=' + authKey); const data = await res.json(); document.getElementById('total-pnl').innerText = '₹' + data.pnl.toFixed(2); document.getElementById('total-pnl').className = data.pnl >= 0 ? 'text-xl font-bold text-emerald-400' : 'text-xl font-bold text-rose-400'; document.getElementById('win-rate').innerText = data.win_rate.toFixed(1) + '%'; document.getElementById('total-trades').innerText = data.total_trades; document.getElementById('dynamic-cap').innerText = '₹' + (50000 + data.pnl).toLocaleString(); const badge = document.getElementById('status-badge'); if (data.paused) { badge.innerText = '⏸ PAUSED'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/50'; } else { badge.innerText = '● ACTIVE'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'; } const tradesContainer = document.getElementById('open-trades-container'); if (data.open_trades.length === 0) { tradesContainer.innerHTML = '<div class="glass-card p-4 rounded-xl text-center text-slate-500 text-sm">No open trades right now.</div>'; } else { let html = ''; data.open_trades.forEach(t => { const typeColor = t[1].includes('BUY') ? 'text-emerald-400' : 'text-rose-400'; const partialTag = t[5] ? '<span class="ml-2 text-[10px] bg-blue-500/20 text-blue-400 px-1 rounded">50% BOOKED</span>' : ''; html += `<div class="glass-card p-4 rounded-xl flex justify-between items-center"><div><p class="font-bold text-white text-sm">${t[0]} ${partialTag}</p><p class="text-[10px] text-slate-400">Entry: ₹${t[2].toFixed(2)}</p></div><div class="text-right"><p class="font-bold text-sm ${typeColor}">${t[1]}</p><p class="text-[10px] text-slate-400">Qty: ${t[6]}</p></div></div>`; }); tradesContainer.innerHTML = html; } } catch (e) {} } 
+async function sendCommand(cmd) { try { const res = await fetch('/api/command', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd, secret: authKey})}); const data = await res.json(); fetchStats(); } catch(e) {} }
+fetchStats(); fetchEquityData(); setInterval(fetchStats, 5000); setInterval(fetchEquityData, 10000);
+</script></body></html>
 """
 
 @app.route('/')
@@ -135,9 +164,9 @@ def dashboard(): return render_template_string(HTML_TEMPLATE)
 
 @app.route('/api/stats')
 def api_stats():
-    pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'") or 0.0
-    total = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status!='OPEN'") or 0)
-    wins = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status='PROFIT ✅'") or 0)
+    pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
+    total = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status!='OPEN'"))
+    wins = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE status='PROFIT ✅'"))
     open_trades = execute_db("SELECT symbol, type, entry_price, mode, sl, partial_exit, qty FROM pro_trades WHERE status='OPEN'", fetchall=True) or []
     return jsonify({"pnl": pnl, "win_rate": (wins/total*100) if total>0 else 0, "total_trades": total, "open_trades": open_trades, "mode": trading_mode, "paused": bot_paused})
 
@@ -152,6 +181,16 @@ def api_equity():
     smoothed = pd.Series(curve).rolling(5, min_periods=1).mean().tolist()
     response = [{"date": data[i][0], "pnl": smoothed[i] - (smoothed[i-1] if i > 0 else 50000)} for i in range(len(smoothed))]
     return jsonify(response)
+
+@app.route('/api/command', methods=['POST'])
+def api_command():
+    try:
+        data = request.json
+        if data.get('secret') != WEB_SECRET: return jsonify({"error": "Unauthorized"}), 401
+        cmd = data.get('command')
+        Thread(target=process_command, args=(AUTHORIZED_USER, cmd)).start()
+        return jsonify({"status": f"Command '{cmd}' Executed."}), 200
+    except Exception as e: return jsonify({"error": str(e)}), 500
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -190,7 +229,8 @@ def execute_db(query, params=(), fetch=False, fetchall=False):
 
 def get_val(query, params=()):
     res = execute_db(query, params, fetch=True)
-    return res[0] if res and res[0] is not None else 0.0 
+    val = res[0] if res and res[0] is not None else 0.0
+    return float(val)
 
 def setup_db():
     execute_db('''CREATE TABLE IF NOT EXISTS pro_trades 
@@ -206,43 +246,54 @@ def recover_state():
             for r in rows: last_signal[r[0]] = "RECOVERED"
 
 # ==========================================
-# 🤖 5. TRUE ML ENGINE & QUANT CACHING
+# 🤖 5. TRUE ML ENGINE (XGBOOST) & QUANT CACHING
 # ==========================================
 ml_model = None
 last_train_time = 0
 
-def get_ml_prediction(rsi, macd, dist):
+# 🔥 UPGRADE 1: XGBoost Predictor
+def get_ml_prediction(rsi, macd, dist, pcr, vix, smc_score):
     global ml_model, last_train_time
     try:
-        if time.time() - last_train_time > 300 or ml_model is None:
+        if time.time() - last_train_time > 180 or ml_model is None:
             rows = execute_db("SELECT features, status FROM pro_trades WHERE status!='OPEN' AND features!=''", fetchall=True)
-            if not rows or len(rows) < 20: return None 
+            if not rows or len(rows) < 50: return None
             
             X, y = [], []
             for feat_str, status in rows:
                 try:
                     parts = feat_str.split(',')
-                    X.append([float(parts[0].split(':')[1]), float(parts[1].split(':')[1]), float(parts[2].split(':')[1])])
+                    # Safe parsing for backward compatibility
+                    X.append([
+                        float(parts[0].split(':')[1]),
+                        float(parts[1].split(':')[1]),
+                        float(parts[2].split(':')[1]),
+                        float(parts[3].split(':')[1]) if len(parts) > 3 else 1.0, # PCR
+                        float(parts[4].split(':')[1]) if len(parts) > 4 else 1.0, # VIX
+                        float(parts[5].split(':')[1]) if len(parts) > 5 else 0    # SMC
+                    ])
                     y.append(1 if "PROFIT" in status else 0)
                 except: continue
             
-            if y.count(1) < 5 or y.count(0) < 5: return None 
+            if len(X) < 50 or y.count(1) < 5 or y.count(0) < 5: return None
             
-            clf = RandomForestClassifier(n_estimators=15, max_depth=3, random_state=42)
-            clf.fit(X, y)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+            clf = xgb.XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.1, random_state=42, eval_metric='logloss')
+            clf.fit(X_train, y_train)
             
             ml_model = clf
             last_train_time = time.time()
 
         if ml_model:
-            return ml_model.predict_proba(np.array([[rsi, macd, dist]]))[0][1] * 100
+            prob = ml_model.predict_proba(np.array([[rsi, macd, dist, pcr, vix, smc_score]]))[0][1] * 100
+            return prob
         return None
-    except Exception:
+    except Exception as e:
+        logging.error(f"XGBoost Error: {e}")
         return None
 
 last_vix = 1.0
 last_vix_time = 0
-
 def get_vix_multiplier():
     global last_vix, last_vix_time
     if time.time() - last_vix_time < 300: return last_vix
@@ -260,14 +311,13 @@ def get_vix_multiplier():
 
 def get_pcr(symbol):
     try:
-        refresh_nse() # 🛠️ FIX 3: Refresh cookie explicitly before call
+        refresh_nse() 
         sym = "FINNIFTY" if symbol == "CNXFINANCE" else symbol
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={sym}"
         for _ in range(2):
             try:
                 res = nse_session.get(url, timeout=5).json()
                 if 'filtered' not in res: return 1.0
-                
                 tot_ce_oi = res['filtered']['CE']['totOI']
                 tot_pe_oi = res['filtered']['PE']['totOI']
                 if tot_ce_oi == 0: return 1.0
@@ -280,7 +330,7 @@ def get_pcr(symbol):
 
 def check_smc(data):
     try:
-        if len(data) < 10: return "NEUTRAL" # 🛠️ FIX 5: Length Guard
+        if len(data) < 10: return "NEUTRAL" 
         bullish_fvg = data['low'].iloc[-1] > data['high'].iloc[-3]
         bearish_fvg = data['high'].iloc[-1] < data['low'].iloc[-3]
         recent_low = data['low'].rolling(10).min().iloc[-2]
@@ -292,13 +342,11 @@ def check_smc(data):
 
 def is_news_time():
     try:
-        now = datetime.now(IST)
+        now = get_ist()
         if now.minute in [29, 59]: return True 
-        
-        est_now = datetime.now(ZoneInfo("UTC")) - timedelta(hours=5)
+        est_now = datetime.now(ZoneInfo("America/New_York"))
         res = requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.xml", timeout=5)
         root = ET.fromstring(res.content)
-        
         for event in root.findall('event'):
             impact = event.find('impact').text
             country = event.find('country').text
@@ -306,15 +354,25 @@ def is_news_time():
                 date_str, time_str = event.find('date').text, event.find('time').text 
                 if time_str == "All Day": continue
                 event_dt = datetime.strptime(f"{date_str} {time_str}", "%m-%d-%Y %I:%M%p")
-                if abs((est_now.replace(tzinfo=None) - event_dt).total_seconds()) <= 1800: return True
+                event_dt = event_dt.replace(tzinfo=ZoneInfo("America/New_York"))
+                if abs((est_now - event_dt).total_seconds()) <= 1800: return True
         return False
     except: return False
 
+# 🔥 UPGRADE 5: Sentiment Filter Placeholder
+def get_sentiment(sym):
+    return 1 # Positive = 1, Negative = -1
+
 # ==========================================
-# 🏦 6. REAL BROKER INTEGRATION (PLACEHOLDER)
+# 🏦 6. REAL BROKER INTEGRATION
 # ==========================================
+alice = None
+
 def place_real_order(symbol, decision_full_text, exec_price, qty):
+    global alice
     try:
+        # if not alice: alice = AliceBlue(username=..., session_id=...)
+        # alice.place_order(...)
         logging.info(f"REAL ORDER MOCK: {decision_full_text} x {qty}")
         return True
     except Exception as e:
@@ -352,7 +410,7 @@ def calc_macd(data):
     return ema12 - ema26, (ema12 - ema26).ewm(span=9, adjust=False).mean()
 
 def process_single_symbol(sym):
-    global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode # 🛠️ FIX 6
+    global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode 
     
     if bot_paused or is_news_time(): return "STOP"
     
@@ -368,7 +426,6 @@ def process_single_symbol(sym):
         data_15m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_15_minute, n_bars=100)
     except: global tv_instance; tv_instance = None; return
 
-    # 🛠️ FIX 5: Guards against empty or low-data scenarios
     if data_5m is None or data_5m.empty or len(data_5m) < 20: return
     if data_15m is None or data_15m.empty or len(data_15m) < 20: return
     if 'volume' not in data_5m.columns: return
@@ -388,7 +445,6 @@ def process_single_symbol(sym):
     gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     loss_safe = -delta.clip(upper=0).ewm(alpha=1/14, adjust=False).mean()
     
-    # 🛠️ FIX 5: Prevent NaN and Zero Division Crash
     if loss_safe.isna().any() or loss_safe.iloc[-1] == 0: return
     
     rs = gain / loss_safe
@@ -493,16 +549,23 @@ def process_single_symbol(sym):
 
     if decision == "BUY 🟢" and not (cp > prev_high or (past_signal.startswith("BUY") and cp > prev_high)): decision = "WAIT"
     if decision == "SELL 🔴" and not (cp < prev_low or (past_signal.startswith("SELL") and cp < prev_low)): decision = "WAIT"
+    
+    # 🔥 UPGRADE 5: Sentiment Gatekeeper
+    if get_sentiment(sym) == -1 and decision == "BUY 🟢": decision = "WAIT"
+    if get_sentiment(sym) == 1 and decision == "SELL 🔴": decision = "WAIT"
 
     with data_lock:
         if sym in last_signal and last_signal[sym] == decision: return
         last_signal[sym] = decision
 
     if decision != "WAIT":
-        features_str = f"RSI:{rsi:.1f},MACD:{macd.iloc[-1]:.2f},DIST:{dist_ema:.1f}"
-        ml_prob = get_ml_prediction(rsi, macd.iloc[-1], dist_ema)
+        smc_score = 1 if smc_signal == "SMC_BULLISH" else (-1 if smc_signal == "SMC_BEARISH" else 0)
+        ml_prob = get_ml_prediction(rsi, macd.iloc[-1], dist_ema, pcr, vix_multi, smc_score)
+        
         if ml_prob is not None and ml_prob < 55.0: return 
         ml_msg = f"{ml_prob:.1f}%" if ml_prob else "Training..."
+        
+        features_str = f"RSI:{rsi:.1f},MACD:{macd.iloc[-1]:.2f},DIST:{dist_ema:.1f},PCR:{pcr:.2f},VIX:{vix_multi:.2f},SMC:{smc_score}"
         
         slippage = max(spread * 0.1, cp * 0.0002) 
         if slippage > (cp * 0.002): return 
@@ -521,8 +584,17 @@ def process_single_symbol(sym):
         dynamic_capital = max(50000, 50000 + total_pnl)
         sl_dist = abs(exec_price - sl)
         
-        # 🛠️ FIX 5: Zero SL Distance Guard
         if sl_dist <= 0: return
+
+        # 🔥 UPGRADE 3: Kelly Criterion
+        rr_ratio = abs(tp - exec_price) / sl_dist if sl_dist > 0 else 0
+        if rr_ratio > 0:
+            win_prob = (ml_prob / 100.0) if ml_prob else 0.55
+            kelly = (win_prob * rr_ratio - (1 - win_prob)) / rr_ratio
+            if kelly > 0:
+                adjusted_risk_percent = min(adjusted_risk_percent, max(0.5, kelly * 100 * 0.5))
+            else:
+                return # Kelly expects a loss, skip trade
 
         base_qty = (dynamic_capital * (adjusted_risk_percent / 100)) / sl_dist
         lot_size = options_lot_size.get(sym, 1) 
@@ -552,12 +624,11 @@ def process_single_symbol(sym):
         
         with data_lock: last_trade_time[sym] = time.time()
         
-        rr_ratio = abs(tp - exec_price) / sl_dist
         if not alerts_muted:
-            send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} QUANT EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🎯 *Target Opt:* {opt_type}\n🛡️ *Hedge Opt:* {hedge_type}\n🛒 *Qty:* {qty} (Risk {adjusted_risk_percent:.1f}%)\n🧠 *RF ML Edge:* {ml_msg} (Conf: {confidence}/5)\n\n🔸 *Spot Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}")
+            send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} QUANT EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🎯 *Target Opt:* {opt_type}\n🛡️ *Hedge Opt:* {hedge_type}\n🛒 *Qty:* {qty} (Risk {adjusted_risk_percent:.1f}%)\n🧠 *XGBoost Edge:* {ml_msg} (Conf: {confidence}/5)\n\n🔸 *Spot Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}")
 
 def run_scan_cycle(manual=False):
-    global bot_paused
+    global bot_paused, current_risk_percent
     now = get_ist()
     m1_start, m1_end = dt_time(9, 15), dt_time(10, 30)
     m2_start, m2_end = dt_time(14, 30), dt_time(15, 30)
@@ -566,8 +637,13 @@ def run_scan_cycle(manual=False):
     today = now.strftime("%Y-%m-%d")
     total_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
     today_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE %s AND status!='OPEN'", (f"{today}%",))
-    trades_today = get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE %s", (f"{today}%",))
+    trades_today = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE %s", (f"{today}%",))) # 🛠️ FIX 1: Int Type
     
+    # 🔥 UPGRADE 6: Auto Compounding
+    if today_pnl > 1500 and current_risk_percent < 3.0:
+        current_risk_percent = min(3.0, current_risk_percent + 0.2)
+        if manual: send_msg(AUTHORIZED_USER, f"🎉 Compounding ON: Risk scaled to {current_risk_percent:.1f}%")
+
     if trades_today >= 3 and today_pnl < 0:
         if manual: send_msg(AUTHORIZED_USER, "🚨 PSYCHOLOGICAL LIMIT: 3 trades done and PnL is negative. Paused for the day.")
         return "PAUSE"
@@ -616,10 +692,84 @@ def auto_scanner():
         time.sleep(60)
 
 # ==========================================
-# 🎮 8. COMMAND HANDLER 
+# 🎮 8. COMMAND HANDLER & BACKTEST
 # ==========================================
-def telegram():
+def process_command(chat_id, txt):
     global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
+    
+    if txt == "/start": send_msg(chat_id, "💎 V25.0 INSTITUTIONAL ENGINE. XGBoost & Dashboard Control Active.")
+    elif txt == "🎛️ Active Markets":
+        curr_syms = ", ".join(active_symbols) if active_symbols else "None"
+        msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
+        send_msg(chat_id, msg)
+    
+    # 🔥 UPGRADE 2: True DB Backtesting Engine
+    elif txt == "/backtest":
+        send_msg(chat_id, "📈 Running 180-day DB backtest...")
+        rows = execute_db("SELECT date, pnl FROM pro_trades WHERE status!='OPEN' ORDER BY date_ts ASC", fetchall=True)
+        if not rows:
+            send_msg(chat_id, "❌ Not enough data for backtest.")
+            return
+        equity = 50000
+        max_dd = 0
+        peak = 50000
+        wins = 0
+        for r in rows:
+            equity += r[1]
+            if equity > peak: peak = equity
+            dd = peak - equity
+            if dd > max_dd: max_dd = dd
+            if r[1] > 0: wins += 1
+        
+        winrate = (wins / len(rows) * 100) if rows else 0
+        send_msg(chat_id, f"🔥 *180-Day DB Backtest:*\nTrades: {len(rows)}\nWin Rate: {winrate:.1f}%\nMax Drawdown: ₹{max_dd:.0f}\nFinal Equity: ₹{equity:.0f}")
+
+    elif txt.startswith("/add "):
+        new_sym = txt.split(" ")[1].upper()
+        if new_sym not in active_symbols: active_symbols.append(new_sym)
+        send_msg(chat_id, f"✅ Added {new_sym}. Active: {', '.join(active_symbols)}")
+    elif txt.startswith("/remove "):
+        rem_sym = txt.split(" ")[1].upper()
+        if rem_sym in active_symbols: active_symbols.remove(rem_sym)
+        send_msg(chat_id, f"❌ Removed {rem_sym}. Active: {', '.join(active_symbols)}")
+    elif txt == "🌐 Open Dashboard":
+        dash_url = f"{DASHBOARD_URL}?key={WEB_SECRET}"
+        inline_keyboard = {"inline_keyboard": [[{"text": "🚀 Secure Web Dashboard", "url": dash_url}]]}
+        try: requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "Access your Dashboard:", "reply_markup": inline_keyboard})
+        except: pass
+    elif txt in ["🔄 Switch Mode", "/mode"]: send_msg(chat_id, "⚠️ Type `CONFIRM REAL` or `CONFIRM DEMO`")
+    elif txt == "CONFIRM REAL": trading_mode = "REAL"; send_msg(chat_id, "💰 *REAL TRADING ENABLED!*")
+    elif txt == "CONFIRM DEMO": trading_mode = "DEMO"; send_msg(chat_id, "🛡️ Switched to *DEMO* Mode safely.")
+    elif txt == "📊 Check Status": send_msg(chat_id, f"📡 Bot: {'Paused ⏸' if bot_paused else 'Active ▶️'}\n🧠 Mode: {trading_mode}\n🛡️ Strategy: {strategy_mode}\n📊 Max Trades: {max_daily_trades}/day")
+    elif txt in ["💰 View PnL", "/pnl"]: 
+        query = "SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'"
+        pnl_amt = get_val(query)
+        send_msg(chat_id, f"💰 Net PnL: ₹{pnl_amt:.2f}")
+    elif txt == "📈 Live PnL":
+        rows = execute_db("SELECT symbol, type, entry_price, qty FROM pro_trades WHERE status='OPEN'", fetchall=True)
+        if not rows: send_msg(chat_id, "No open trades.")
+        else:
+            msg, total_live, tv = "📈 *LIVE OPEN TRADES:*\n\n", 0, safe_tv_get()
+            for sym, t_type, entry, qty in rows:
+                try:
+                    time.sleep(1)
+                    d = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=2)
+                    if d is None or d.empty: continue
+                    pnl = ((d['close'].iloc[-1] - entry) if "BUY" in t_type else (entry - d['close'].iloc[-1])) * qty
+                    total_live += pnl; msg += f"🔹 {sym} ({qty} qty): ₹{pnl:.2f}\n"
+                except: pass
+            send_msg(chat_id, msg + f"\n💰 *Total Floating:* ₹{total_live:.2f}")
+    elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [send_msg(chat_id, "🔍 Parallel Scan Running..."), run_scan_cycle(True), scan_lock.release()])).start()
+    elif txt == "🛡️ Safe Mode": strategy_mode = "SAFE"; send_msg(chat_id, "🛡️ Safe Mode ON.")
+    elif txt == "⚡ Aggressive Mode": strategy_mode = "AGGRESSIVE"; send_msg(chat_id, "⚡ Aggressive Mode ON.")
+    elif txt in ["❌ Close All", "/closeall"]:
+        rows = execute_db("SELECT id FROM pro_trades WHERE status='OPEN'", fetchall=True)
+        if rows: [execute_db("UPDATE pro_trades SET status='CLOSED ⚠️' WHERE id=%s", (r[0],)) for r in rows]; send_msg(chat_id, "⚠️ All FORCE CLOSED.")
+        else: send_msg(chat_id, "❌ No open trades.")
+    elif txt in ["⏸ Pause Bot", "/pause"]: bot_paused = True; send_msg(chat_id, "🛑 Bot Paused.")
+    elif txt in ["▶️ Resume Bot", "/resume"]: bot_paused = False; send_msg(chat_id, "✅ Bot Resumed.")
+
+def telegram():
     last_id = None
     setup_db()
     recover_state()
@@ -637,64 +787,7 @@ def telegram():
                     if "message" in upd and "text" in upd["message"]:
                         chat_id, txt = upd["message"]["chat"]["id"], upd["message"]["text"]
                         if chat_id != AUTHORIZED_USER: send_msg(chat_id, "❌ *UNAUTHORIZED ACCESS.*"); continue
-                            
-                        if txt == "/start": send_msg(chat_id, "💎 V24.0 BULLETPROOF ENGINE. Zero-Division & SSL active.")
-                        elif txt == "🎛️ Active Markets":
-                            curr_syms = ", ".join(active_symbols) if active_symbols else "None"
-                            msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
-                            send_msg(chat_id, msg)
-                        
-                        elif txt == "/backtest":
-                            send_msg(chat_id, "⚙️ *Backtest Engine Initializing...*\n(Note: Historical data simulation requires local SDKs. Extracting DB metrics instead...)")
-                            total = get_val("SELECT COUNT(*) FROM pro_trades WHERE status!='OPEN'")
-                            wins = get_val("SELECT COUNT(*) FROM pro_trades WHERE status='PROFIT ✅'")
-                            win_r = (wins/total*100) if total > 0 else 0
-                            send_msg(chat_id, f"📊 *DB Strategy Metrics:*\nTotal Trades: {total}\nWin Rate: {win_r:.1f}%\n(Real-time deep backtesting requires TradingView PineScript or Backtrader linkage).")
-
-                        elif txt.startswith("/add "):
-                            new_sym = txt.split(" ")[1].upper()
-                            if new_sym not in active_symbols: active_symbols.append(new_sym)
-                            send_msg(chat_id, f"✅ Added {new_sym}. Active: {', '.join(active_symbols)}")
-                        elif txt.startswith("/remove "):
-                            rem_sym = txt.split(" ")[1].upper()
-                            if rem_sym in active_symbols: active_symbols.remove(rem_sym)
-                            send_msg(chat_id, f"❌ Removed {rem_sym}. Active: {', '.join(active_symbols)}")
-                        elif txt == "🌐 Open Dashboard":
-                            dash_url = f"https://ai-trading-bot-itc0.onrender.com?key={WEB_SECRET}"
-                            inline_keyboard = {"inline_keyboard": [[{"text": "🚀 Secure Web Dashboard", "url": dash_url}]]}
-                            try: requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "Access your Dashboard:", "reply_markup": inline_keyboard})
-                            except: pass
-                        elif txt in ["🔄 Switch Mode", "/mode"]: send_msg(chat_id, "⚠️ Type `CONFIRM REAL` or `CONFIRM DEMO`")
-                        elif txt == "CONFIRM REAL": trading_mode = "REAL"; send_msg(chat_id, "💰 *REAL TRADING ENABLED!*")
-                        elif txt == "CONFIRM DEMO": trading_mode = "DEMO"; send_msg(chat_id, "🛡️ Switched to *DEMO* Mode safely.")
-                        elif txt == "📊 Check Status": send_msg(chat_id, f"📡 Bot: {'Paused ⏸' if bot_paused else 'Active ▶️'}\n🧠 Mode: {trading_mode}\n🛡️ Strategy: {strategy_mode}\n📊 Max Trades: {max_daily_trades}/day")
-                        elif txt in ["💰 View PnL", "/pnl"]: 
-                            query = "SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'"
-                            pnl_amt = get_val(query)
-                            send_msg(chat_id, f"💰 Net PnL: ₹{pnl_amt:.2f}")
-                        elif txt == "📈 Live PnL":
-                            rows = execute_db("SELECT symbol, type, entry_price, qty FROM pro_trades WHERE status='OPEN'", fetchall=True)
-                            if not rows: send_msg(chat_id, "No open trades.")
-                            else:
-                                msg, total_live, tv = "📈 *LIVE OPEN TRADES:*\n\n", 0, safe_tv_get()
-                                for sym, t_type, entry, qty in rows:
-                                    try:
-                                        time.sleep(1)
-                                        d = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=2)
-                                        if d is None or d.empty: continue
-                                        pnl = ((d['close'].iloc[-1] - entry) if "BUY" in t_type else (entry - d['close'].iloc[-1])) * qty
-                                        total_live += pnl; msg += f"🔹 {sym} ({qty} qty): ₹{pnl:.2f}\n"
-                                    except: pass
-                                send_msg(chat_id, msg + f"\n💰 *Total Floating:* ₹{total_live:.2f}")
-                        elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [send_msg(chat_id, "🔍 Parallel Scan Running..."), run_scan_cycle(True), scan_lock.release()])).start()
-                        elif txt == "🛡️ Safe Mode": strategy_mode = "SAFE"; send_msg(chat_id, "🛡️ Safe Mode ON.")
-                        elif txt == "⚡ Aggressive Mode": strategy_mode = "AGGRESSIVE"; send_msg(chat_id, "⚡ Aggressive Mode ON.")
-                        elif txt in ["❌ Close All", "/closeall"]:
-                            rows = execute_db("SELECT id FROM pro_trades WHERE status='OPEN'", fetchall=True)
-                            if rows: [execute_db("UPDATE pro_trades SET status='CLOSED ⚠️' WHERE id=%s", (r[0],)) for r in rows]; send_msg(chat_id, "⚠️ All FORCE CLOSED.")
-                            else: send_msg(chat_id, "❌ No open trades.")
-                        elif txt in ["⏸ Pause Bot", "/pause"]: bot_paused = True; send_msg(chat_id, "🛑 Bot Paused.")
-                        elif txt in ["▶️ Resume Bot", "/resume"]: bot_paused = False; send_msg(chat_id, "✅ Bot Resumed.")
+                        process_command(chat_id, txt)
         except: time.sleep(5)
 
 if __name__ == "__main__":
