@@ -254,43 +254,39 @@ last_train_time = 0
 # 🔥 UPGRADE 1: XGBoost Predictor
 def get_ml_prediction(rsi, macd, dist, pcr, vix, smc_score):
     global ml_model, last_train_time
-    try:
-        if time.time() - last_train_time > 180 or ml_model is None:
-            rows = execute_db("SELECT features, status FROM pro_trades WHERE status!='OPEN' AND features!=''", fetchall=True)
-            if not rows or len(rows) < 50: return None
-            
-            X, y = [], []
-            for feat_str, status in rows:
-                try:
-                    parts = feat_str.split(',')
-                    # Safe parsing for backward compatibility
-                    X.append([
-                        float(parts[0].split(':')[1]),
-                        float(parts[1].split(':')[1]),
-                        float(parts[2].split(':')[1]),
-                        float(parts[3].split(':')[1]) if len(parts) > 3 else 1.0, # PCR
-                        float(parts[4].split(':')[1]) if len(parts) > 4 else 1.0, # VIX
-                        float(parts[5].split(':')[1]) if len(parts) > 5 else 0    # SMC
-                    ])
-                    y.append(1 if "PROFIT" in status else 0)
-                except: continue
-            
-            if len(X) < 50 or y.count(1) < 5 or y.count(0) < 5: return None
-            
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-            clf = xgb.XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.1, random_state=42, eval_metric='logloss')
-            clf.fit(X_train, y_train)
-            
-            ml_model = clf
-            last_train_time = time.time()
+    if time.time() - last_train_time > 180 or ml_model is None:
+        rows = execute_db("SELECT features, status FROM pro_trades WHERE status!='OPEN' AND features!=''", fetchall=True)
+        if not rows or len(rows) < 50: return None
+        
+        X, y = [], []
+        for feat_str, status in rows:
+            try:
+                parts = feat_str.split(',')
+                # Safe parsing for backward compatibility
+                X.append([
+                    float(parts[0].split(':')[1]),
+                    float(parts[1].split(':')[1]),
+                    float(parts[2].split(':')[1]),
+                    float(parts[3].split(':')[1]) if len(parts) > 3 else 1.0, # PCR
+                    float(parts[4].split(':')[1]) if len(parts) > 4 else 1.0, # VIX
+                    float(parts[5].split(':')[1]) if len(parts) > 5 else 0    # SMC
+                ])
+                y.append(1 if "PROFIT" in status else 0)
+            except: continue
+        
+        if len(X) < 50 or y.count(1) < 5 or y.count(0) < 5: return None
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        clf = xgb.XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.1, random_state=42, eval_metric='logloss')
+        clf.fit(X_train, y_train)
+        
+        ml_model = clf
+        last_train_time = time.time()
 
-        if ml_model:
-            prob = ml_model.predict_proba(np.array([[rsi, macd, dist, pcr, vix, smc_score]]))[0][1] * 100
-            return prob
-        return None
-    except Exception as e:
-        logging.error(f"XGBoost Error: {e}")
-        return None
+    if ml_model:
+        prob = ml_model.predict_proba(np.array([[rsi, macd, dist, pcr, vix, smc_score]]))[0][1] * 100
+        return prob
+    return None
 
 last_vix = 1.0
 last_vix_time = 0
@@ -550,7 +546,6 @@ def process_single_symbol(sym):
     if decision == "BUY 🟢" and not (cp > prev_high or (past_signal.startswith("BUY") and cp > prev_high)): decision = "WAIT"
     if decision == "SELL 🔴" and not (cp < prev_low or (past_signal.startswith("SELL") and cp < prev_low)): decision = "WAIT"
     
-    # 🔥 UPGRADE 5: Sentiment Gatekeeper
     if get_sentiment(sym) == -1 and decision == "BUY 🟢": decision = "WAIT"
     if get_sentiment(sym) == 1 and decision == "SELL 🔴": decision = "WAIT"
 
@@ -586,7 +581,6 @@ def process_single_symbol(sym):
         
         if sl_dist <= 0: return
 
-        # 🔥 UPGRADE 3: Kelly Criterion
         rr_ratio = abs(tp - exec_price) / sl_dist if sl_dist > 0 else 0
         if rr_ratio > 0:
             win_prob = (ml_prob / 100.0) if ml_prob else 0.55
@@ -594,7 +588,7 @@ def process_single_symbol(sym):
             if kelly > 0:
                 adjusted_risk_percent = min(adjusted_risk_percent, max(0.5, kelly * 100 * 0.5))
             else:
-                return # Kelly expects a loss, skip trade
+                return 
 
         base_qty = (dynamic_capital * (adjusted_risk_percent / 100)) / sl_dist
         lot_size = options_lot_size.get(sym, 1) 
@@ -637,9 +631,8 @@ def run_scan_cycle(manual=False):
     today = now.strftime("%Y-%m-%d")
     total_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
     today_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE date LIKE %s AND status!='OPEN'", (f"{today}%",))
-    trades_today = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE %s", (f"{today}%",))) # 🛠️ FIX 1: Int Type
+    trades_today = int(get_val("SELECT COUNT(*) FROM pro_trades WHERE date LIKE %s", (f"{today}%",)))
     
-    # 🔥 UPGRADE 6: Auto Compounding
     if today_pnl > 1500 and current_risk_percent < 3.0:
         current_risk_percent = min(3.0, current_risk_percent + 0.2)
         if manual: send_msg(AUTHORIZED_USER, f"🎉 Compounding ON: Risk scaled to {current_risk_percent:.1f}%")
@@ -703,8 +696,7 @@ def process_command(chat_id, txt):
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
         send_msg(chat_id, msg)
     
-    # 🔥 UPGRADE 2: True DB Backtesting Engine
-    elif txt == "/backtest":
+    elif txt in ["/backtest", "⚙️ Backtest"]:
         send_msg(chat_id, "📈 Running 180-day DB backtest...")
         rows = execute_db("SELECT date, pnl FROM pro_trades WHERE status!='OPEN' ORDER BY date_ts ASC", fetchall=True)
         if not rows:
