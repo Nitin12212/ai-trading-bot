@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from tvDatafeed import TvDatafeed, Interval
 from flask import Flask, render_template_string, jsonify, request
+from waitress import serve # 🛠️ FIX: Removes the Red WSGI Warning
 
 # 🔥 UPGRADE 1: XGBoost & ML Models
 import xgboost as xgb
@@ -133,7 +134,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V25.0 Institutional</h1><p class="text-xs text-slate-400">XGBoost + Kelly Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.0 God Mode</h1><p class="text-xs text-slate-400">ATR SL + Finnhub AI</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
 
 <h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
 <div class="grid grid-cols-2 gap-2 mb-6">
@@ -206,7 +207,8 @@ def webhook():
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    # 🛠️ FIX: Removed development server warning by using Waitress (Production WSGI)
+    serve(app, host='0.0.0.0', port=port)
 
 # ==========================================
 # 🗄️ 4. FAST POOLED DATABASE & RECOVERY
@@ -251,42 +253,46 @@ def recover_state():
 ml_model = None
 last_train_time = 0
 
-# 🔥 UPGRADE 1: XGBoost Predictor
+# 🔥 UPGRADE 1: XGBoost Predictor (Fixed + Crash-Proof)
 def get_ml_prediction(rsi, macd, dist, pcr, vix, smc_score):
     global ml_model, last_train_time
-    if time.time() - last_train_time > 180 or ml_model is None:
-        rows = execute_db("SELECT features, status FROM pro_trades WHERE status!='OPEN' AND features!=''", fetchall=True)
-        if not rows or len(rows) < 50: return None
+    try:
+        if time.time() - last_train_time > 180 or ml_model is None:
+            rows = execute_db("SELECT features, status FROM pro_trades WHERE status!='OPEN' AND features!=''", fetchall=True)
+            if not rows or len(rows) < 50:
+                pass # Use old model
+            else:
+                X, y = [], []
+                for feat_str, status in rows:
+                    try:
+                        parts = feat_str.split(',')
+                        X.append([
+                            float(parts[0].split(':')[1]),
+                            float(parts[1].split(':')[1]),
+                            float(parts[2].split(':')[1]),
+                            float(parts[3].split(':')[1]) if len(parts) > 3 else 1.0,
+                            float(parts[4].split(':')[1]) if len(parts) > 4 else 1.0,
+                            float(parts[5].split(':')[1]) if len(parts) > 5 else 0
+                        ])
+                        y.append(1 if "PROFIT" in status else 0)
+                    except: continue
+                
+                if len(X) < 50 or y.count(1) < 5 or y.count(0) < 5:
+                    pass  
+                else:
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                    clf = xgb.XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.1, random_state=42, eval_metric='logloss')
+                    clf.fit(X_train, y_train)
+                    ml_model = clf
+                    last_train_time = time.time()
         
-        X, y = [], []
-        for feat_str, status in rows:
-            try:
-                parts = feat_str.split(',')
-                # Safe parsing for backward compatibility
-                X.append([
-                    float(parts[0].split(':')[1]),
-                    float(parts[1].split(':')[1]),
-                    float(parts[2].split(':')[1]),
-                    float(parts[3].split(':')[1]) if len(parts) > 3 else 1.0, # PCR
-                    float(parts[4].split(':')[1]) if len(parts) > 4 else 1.0, # VIX
-                    float(parts[5].split(':')[1]) if len(parts) > 5 else 0    # SMC
-                ])
-                y.append(1 if "PROFIT" in status else 0)
-            except: continue
-        
-        if len(X) < 50 or y.count(1) < 5 or y.count(0) < 5: return None
-        
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        clf = xgb.XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.1, random_state=42, eval_metric='logloss')
-        clf.fit(X_train, y_train)
-        
-        ml_model = clf
-        last_train_time = time.time()
-
-    if ml_model:
-        prob = ml_model.predict_proba(np.array([[rsi, macd, dist, pcr, vix, smc_score]]))[0][1] * 100
-        return prob
-    return None
+        if ml_model:
+            prob = ml_model.predict_proba(np.array([[rsi, macd, dist, pcr, vix, smc_score]]))[0][1] * 100
+            return prob
+        return None
+    except Exception as e:
+        logging.error(f"XGBoost Error: {e}")
+        return None
 
 last_vix = 1.0
 last_vix_time = 0
@@ -355,9 +361,17 @@ def is_news_time():
         return False
     except: return False
 
-# 🔥 UPGRADE 5: Sentiment Filter Placeholder
+# 🔥 V26: Real Market Sentiment (Finnhub Free API)
 def get_sentiment(sym):
-    return 1 # Positive = 1, Negative = -1
+    try:
+        api_key = os.getenv("FINNHUB_API_KEY")
+        if not api_key: return 1
+        url = f"https://finnhub.io/api/v1/news-sentiment?symbol={sym}&token={api_key}"
+        res = requests.get(url, timeout=5).json()
+        score = res.get('reddit', {}).get('sentiment', 0) + res.get('twitter', {}).get('sentiment', 0)
+        return 1 if score > 0 else (-1 if score < 0 else 0)
+    except:
+        return 1  # fallback safe
 
 # ==========================================
 # 🏦 6. REAL BROKER INTEGRATION
@@ -367,8 +381,6 @@ alice = None
 def place_real_order(symbol, decision_full_text, exec_price, qty):
     global alice
     try:
-        # if not alice: alice = AliceBlue(username=..., session_id=...)
-        # alice.place_order(...)
         logging.info(f"REAL ORDER MOCK: {decision_full_text} x {qty}")
         return True
     except Exception as e:
@@ -474,8 +486,9 @@ def process_single_symbol(sym):
                 if not alerts_muted: send_msg(AUTHORIZED_USER, f"🎯 *PARTIAL BOOKED (50%)*: {sym}\n💰 Locked: ₹{locked_pnl:.2f}\n🛡️ SL moved to Entry.")
                 continue 
 
-            if pts_captured > (abs(tp - entry) * 0.7):
-                new_sl = entry + (pts_captured * 0.5) if "BUY" in t_type else entry - (pts_captured * 0.5)
+            # 🔥 V26: ATR Trailing Stop
+            if pts_captured > atr * 2.5:
+                new_sl = entry + (pts_captured * 0.65) if "BUY" in t_type else entry - (pts_captured * 0.65)
                 if ("BUY" in t_type and new_sl > sl) or ("SELL" in t_type and new_sl < sl):
                     execute_db("UPDATE pro_trades SET sl=%s WHERE id=%s", (new_sl, t_id))
                     sl = new_sl
@@ -566,8 +579,11 @@ def process_single_symbol(sym):
         if slippage > (cp * 0.002): return 
         
         exec_price = cp + slippage if "BUY" in decision else cp - slippage
-        sl = exec_price - (exec_price * 0.002) if "BUY" in decision else exec_price + (exec_price * 0.002)
-        tp = exec_price + (exec_price * 0.005) if "BUY" in decision else exec_price - (exec_price * 0.005)
+        
+        # 🔥 V26: ATR Dynamic Risk (Much smarter SL/TP calculation)
+        sl_dist = atr * 1.5
+        sl = exec_price - sl_dist if "BUY" in decision else exec_price + sl_dist
+        tp = exec_price + (atr * 4.0) if "BUY" in decision else exec_price - (atr * 4.0)
         
         total_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
         today = get_ist().strftime("%Y-%m-%d")
@@ -577,7 +593,6 @@ def process_single_symbol(sym):
         adjusted_risk_percent = active_risk_percent * vix_multi
 
         dynamic_capital = max(50000, 50000 + total_pnl)
-        sl_dist = abs(exec_price - sl)
         
         if sl_dist <= 0: return
 
@@ -690,7 +705,7 @@ def auto_scanner():
 def process_command(chat_id, txt):
     global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
     
-    if txt == "/start": send_msg(chat_id, "💎 V25.0 INSTITUTIONAL ENGINE. XGBoost & Dashboard Control Active.")
+    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.0 God Mode Engine Online.")
     elif txt == "🎛️ Active Markets":
         curr_syms = ", ".join(active_symbols) if active_symbols else "None"
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
