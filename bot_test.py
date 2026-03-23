@@ -359,10 +359,11 @@ def is_news_time():
         return False
     except: return False
 
+# 🛠️ FIX 1: Sentiment Neutral Fallback
 def get_sentiment(sym):
     try:
         api_key = os.getenv("FINNHUB_API_KEY")
-        if not api_key: return 1
+        if not api_key: return 0 
         url = f"https://finnhub.io/api/v1/news-sentiment?symbol={sym}&token={api_key}"
         res = requests.get(url, timeout=5).json()
         news_score = res.get('companyNewsScore', 0.5)
@@ -370,7 +371,7 @@ def get_sentiment(sym):
         score = (news_score * 2 - 1) + (bullish * 2 - 1)
         return 1 if score > 0.2 else (-1 if score < -0.2 else 0)
     except:
-        return 1
+        return 0
 
 # ==========================================
 # 🏦 6. REAL BROKER INTEGRATION
@@ -400,9 +401,9 @@ global_drawdown_limit = -5000.0
 max_daily_trades = 5          
 trade_cooldown_seconds = 300  
 last_trade_time = {}          
-active_symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE', 'SENSEX', 'BANKEX'] # 🛠️ FIX 4: SENSEX & BANKEX Added defaults
+active_symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE', 'SENSEX', 'BANKEX'] 
 
-options_lot_size = {"NIFTY": 50, "BANKNIFTY": 15, "CNXFINANCE": 40, "SENSEX": 10, "BANKEX": 15} # 🛠️ FIX 4: Updated Lot Sizes
+options_lot_size = {"NIFTY": 50, "BANKNIFTY": 15, "CNXFINANCE": 40, "SENSEX": 10, "BANKEX": 15} 
 
 tv_instance = None
 def safe_tv_get():
@@ -427,7 +428,6 @@ def process_single_symbol(sym):
     time.sleep(random.uniform(2.0, 5.0))
     tv = safe_tv_get()
     
-    # 🛠️ FIX 1: Proper Exchange selection to prevent "None" data for BSE symbols
     exch = 'BSE' if sym in ['SENSEX', 'BANKEX'] else 'NSE'
     
     try:
@@ -438,15 +438,16 @@ def process_single_symbol(sym):
 
     if data_5m is None or data_5m.empty or len(data_5m) < 20: return
     if data_15m is None or data_15m.empty or len(data_15m) < 20: return
-    if 'volume' not in data_5m.columns: return
     
     cp = data_5m['close'].iloc[-1]
     
-    volume_avg = data_5m['volume'].rolling(20).mean().iloc[-1]
-    if data_5m['volume'].iloc[-1] < volume_avg: return 
+    # 🛠️ FIX 2: Smart Volume Check
+    if 'volume' in data_5m.columns and data_5m['volume'].iloc[-1] > 0:
+        volume_avg = data_5m['volume'].rolling(20).mean().iloc[-1]
+        if pd.notna(volume_avg) and data_5m['volume'].iloc[-1] < volume_avg: return 
 
     atr = (data_5m['high'] - data_5m['low']).rolling(14).mean().iloc[-1]
-    if (atr / cp) < 0.0002: return # 🛠️ FIX 2: Relaxed ATR filter to allow trades in normal market conditions
+    if pd.isna(atr) or (atr / cp) < 0.0002: return 
     
     ema200 = data_5m['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     trend_15m_up = data_15m['close'].iloc[-1] > data_15m['close'].ewm(span=50).mean().iloc[-1]
@@ -516,7 +517,7 @@ def process_single_symbol(sym):
     
     rsi_buy, rsi_sell = (60, 40) if strategy_mode == "SAFE" else (50, 50)
     dist_ema = (abs(cp - ema200) / ema200) * 100
-    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return # 🛠️ FIX 2: Relaxed EMA distance filter
+    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return 
 
     spread = data_5m['high'].iloc[-1] - data_5m['low'].iloc[-1]
     if (spread / cp) > 0.003: return 
@@ -613,7 +614,6 @@ def process_single_symbol(sym):
         strike_step = 100 if sym in ["BANKNIFTY", "SENSEX", "BANKEX"] else 50
         atm_strike = int(round(cp / strike_step) * strike_step)
         
-        # 🛠️ FIX 3: Allowed Opt selection even without 15m trend match (bypassed the harsh block)
         opt_type, hedge_type = "", ""
         if "BUY" in decision:
             opt_type = f"{atm_strike} CE"
@@ -761,7 +761,8 @@ def process_command(chat_id, txt):
             for sym, t_type, entry, qty in rows:
                 try:
                     time.sleep(1)
-                    d = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=2)
+                    exch = 'BSE' if sym in ['SENSEX', 'BANKEX'] else 'NSE'
+                    d = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=2)
                     if d is None or d.empty: continue
                     pnl = ((d['close'].iloc[-1] - entry) if "BUY" in t_type else (entry - d['close'].iloc[-1])) * qty
                     total_live += pnl; msg += f"🔹 {sym} ({qty} qty): ₹{pnl:.2f}\n"
