@@ -18,7 +18,10 @@ from queue import Queue
 from flask import Flask, render_template_string, jsonify, request
 from waitress import serve 
 
+# 🔥 UPGRADE: DEFINITIVELY Replaced dead tvDatafeed with yfinance
 import yfinance as yf
+
+# 🔥 UPGRADE 1: XGBoost & ML Models
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 
@@ -47,9 +50,6 @@ if AUTHORIZED_USER == 0: logging.error("🚨 CRITICAL: AUTHORIZED_USER not set!"
 scan_lock = Lock()
 data_lock = Lock() 
 
-# 🔥 NEW: Pending Trades Dictionary for Button Logic
-pending_trades = {}
-
 IST = ZoneInfo("Asia/Kolkata")
 def get_ist(): return datetime.now(IST)
 
@@ -71,7 +71,7 @@ if DB_URL:
 
 nse_session = requests.Session()
 nse_session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "User-Agent": "Mozilla/5.0",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.nseindia.com/"
@@ -84,15 +84,14 @@ def refresh_nse():
     except: pass
 
 # ==========================================
-# 🚀 2. TELEGRAM MESSAGE QUEUE (UPDATED FOR BUTTONS)
+# 🚀 2. TELEGRAM MESSAGE QUEUE 
 # ==========================================
 msg_queue = Queue()
 
-def _send_msg_raw(chat_id, text, reply_markup=None):
+def _send_msg_raw(chat_id, text):
     if not TOKEN or not chat_id: return
     url = f"{BASE_URL}/sendMessage"
-    
-    default_keyboard = {
+    keyboard = {
         "keyboard": [
             [{"text": "📊 Check Status"}, {"text": "📈 Live PnL"}],
             [{"text": "⚙️ Backtest"}, {"text": "🔍 Scan Now"}],
@@ -102,26 +101,17 @@ def _send_msg_raw(chat_id, text, reply_markup=None):
             [{"text": "⏸ Pause Bot"}, {"text": "▶️ Resume Bot"}]
         ], "resize_keyboard": True
     }
-    
-    payload = {
-        "chat_id": chat_id, 
-        "text": text, 
-        "parse_mode": "Markdown", 
-        "disable_web_page_preview": True,
-        "reply_markup": reply_markup if reply_markup else default_keyboard
-    }
-    
     for _ in range(3):
         try: 
-            requests.post(url, json=payload, timeout=5)
+            requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "reply_markup": keyboard, "disable_web_page_preview": True}, timeout=5)
             return
         except Exception: time.sleep(2)
 
 def telegram_worker():
     while True:
         try: 
-            chat_id, text, reply_markup = msg_queue.get()
-            _send_msg_raw(chat_id, text, reply_markup)
+            chat_id, text = msg_queue.get()
+            _send_msg_raw(chat_id, text)
             msg_queue.task_done()
             time.sleep(1.2)  
         except Exception as e:
@@ -130,8 +120,8 @@ def telegram_worker():
 
 Thread(target=telegram_worker, daemon=True).start()
 
-def send_msg(chat_id, text, reply_markup=None):
-    msg_queue.put((chat_id, text, reply_markup))
+def send_msg(chat_id, text):
+    msg_queue.put((chat_id, text))
 
 # ==========================================
 # 🌐 3. DASHBOARD API & COMMAND CENTER
@@ -145,7 +135,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V28.0 Semi-Auto</h1><p class="text-xs text-slate-400">Approve/Reject Mode Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V27.5 God Mode</h1><p class="text-xs text-slate-400">Approve/Reject Mode Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
 
 <h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
 <div class="grid grid-cols-2 gap-2 mb-6">
@@ -305,7 +295,6 @@ def get_ml_prediction(rsi, macd, dist, pcr, vix, smc_score):
 
 last_vix = 1.0
 last_vix_time = 0
-
 def get_vix_multiplier():
     global last_vix, last_vix_time
     if time.time() - last_vix_time < 300: return last_vix
@@ -416,12 +405,6 @@ active_symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE', 'SENSEX', 'BANKEX']
 options_lot_size = {"NIFTY": 50, "BANKNIFTY": 15, "CNXFINANCE": 40, "SENSEX": 10, "BANKEX": 15} 
 yf_symbol_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "CNXFINANCE": "NIFTY_FIN_SERVICE.NS", "SENSEX": "^BSESN", "BANKEX": "BSE-BANK.BO"}
 
-# 🛠️ FIX 1: Robust Yahoo Finance column extractor to prevent "YF API Error"
-def get_yf_col(df, col):
-    if isinstance(df.columns, pd.MultiIndex):
-        return df[col].iloc[:, 0]
-    return df[col]
-
 def calc_macd(data):
     ema12 = data['close'].ewm(span=12, adjust=False).mean()
     ema26 = data['close'].ewm(span=26, adjust=False).mean()
@@ -431,7 +414,7 @@ def process_single_symbol(sym, manual=False):
     global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode 
     
     if bot_paused: return f"⏸ {sym}: Paused" if manual else None
-    if is_news_time(): return f"📰 {sym}: News Block" if manual else None
+    if is_news_time(): return f"📰 {sym}: News Time Block" if manual else None
     
     with data_lock:
         if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return f"⏳ {sym}: Cooldown" if manual else None
@@ -446,17 +429,16 @@ def process_single_symbol(sym, manual=False):
         
         if d5.empty or d15.empty: return f"❌ {sym}: YF Data Empty" if manual else None
         
-        # 🛠️ FIX 1 (Applied): Secure data extraction without crashing
-        data_1m = pd.DataFrame({'close': get_yf_col(d1, 'Close')})
+        data_1m = pd.DataFrame({'close': d1['Close'].iloc[:, 0] if isinstance(d1.columns, pd.MultiIndex) else d1['Close']})
         data_5m = pd.DataFrame({
-            'close': get_yf_col(d5, 'Close'),
-            'high': get_yf_col(d5, 'High'),
-            'low': get_yf_col(d5, 'Low'),
-            'volume': get_yf_col(d5, 'Volume')
+            'close': d5['Close'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['Close'],
+            'high': d5['High'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['High'],
+            'low': d5['Low'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['Low'],
+            'volume': d5['Volume'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['Volume']
         })
-        data_15m = pd.DataFrame({'close': get_yf_col(d15, 'Close')})
+        data_15m = pd.DataFrame({'close': d15['Close'].iloc[:, 0] if isinstance(d15.columns, pd.MultiIndex) else d15['Close']})
     except Exception as e:
-        return f"❌ {sym}: YF API Error ({str(e)})" if manual else None
+        return f"❌ {sym}: YF API Error" if manual else None
 
     if data_5m is None or data_5m.empty or len(data_5m) < 20: return f"❌ {sym}: No 5m Data" if manual else None
     if data_15m is None or data_15m.empty or len(data_15m) < 20: return f"❌ {sym}: No 15m Data" if manual else None
@@ -550,9 +532,11 @@ def process_single_symbol(sym, manual=False):
     pcr = get_pcr(sym)
     smc_signal = check_smc(data_5m)
     
+    momentum_1m_up = data_1m['close'].iloc[-1] > data_1m['close'].iloc[-3] if data_1m is not None and not data_1m.empty else False
+
     decision = "WAIT"
-    confidence = 0
     
+    confidence = 0
     if cp > ema200:
         if rsi > rsi_buy: confidence += 1
         if macd.iloc[-1] > macd_sig.iloc[-1]: confidence += 1
@@ -568,10 +552,14 @@ def process_single_symbol(sym, manual=False):
         if smc_signal == "SMC_BEARISH": confidence += 1
         if confidence >= 2: decision = "SELL 🔴"
 
-    prev_close = data_5m['close'].iloc[-2]
+    prev_high = data_5m['high'].iloc[-2]
+    prev_low = data_5m['low'].iloc[-2]
     
-    if decision == "BUY 🟢" and cp <= prev_close: decision = "WAIT"
-    if decision == "SELL 🔴" and cp >= prev_close: decision = "WAIT"
+    with data_lock:
+        past_signal = last_signal.get(sym, "WAIT")
+
+    if decision == "BUY 🟢" and cp <= prev_high: decision = "WAIT"
+    if decision == "SELL 🔴" and cp >= prev_low: decision = "WAIT"
     
     if get_sentiment(sym) == -1 and decision == "BUY 🟢": return f"📰 {sym}: Sentiment Blocked BUY" if manual else None
     if get_sentiment(sym) == 1 and decision == "SELL 🔴": return f"📰 {sym}: Sentiment Blocked SELL" if manual else None
@@ -606,6 +594,7 @@ def process_single_symbol(sym, manual=False):
         
         active_risk_percent = 1.0 if today_pnl < 0 else current_risk_percent
         adjusted_risk_percent = active_risk_percent * vix_multi
+
         dynamic_capital = max(50000, 50000 + total_pnl)
         
         if sl_dist <= 0: return f"❌ {sym}: Math SL Error" if manual else None
@@ -637,13 +626,8 @@ def process_single_symbol(sym, manual=False):
             
         final_decision = f"{decision} | {opt_type} (Hedge: {hedge_type})"
 
-        # 🔥 🛠️ FIX 2: Manual Control! Sends Telegram Buttons Instead of Executing Automatically.
+        # 🔥 NEW FEATURE: Approve/Reject Buttons Logic
         trade_id = f"{sym}_{int(time.time())}"
-        pending_trades[trade_id] = {
-            "sym": sym, "final_decision": final_decision, "exec_price": exec_price, 
-            "qty": qty, "sl": sl, "tp": tp, "features_str": features_str
-        }
-        
         inline_kb = {
             "inline_keyboard": [
                 [{"text": "✅ Haan, Trade Le Lo", "callback_data": f"YES_{trade_id}"}],
@@ -651,10 +635,21 @@ def process_single_symbol(sym, manual=False):
             ]
         }
         
-        msg = f"🚨 *TRADE SETUP FOUND!* 🚨\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {final_decision}\n🛒 *Qty:* {qty} (Risk {adjusted_risk_percent:.1f}%)\n🧠 *XGBoost Edge:* {ml_msg} (Conf: {confidence}/5)\n\n🔸 *Spot Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}\n\n👉 *Kya mujhe ye trade lena chahiye?*"
+        msg = f"🚀 *TRADE SETUP FOUND* 🚀\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {final_decision}\n🛒 *Qty:* {qty} (Risk {adjusted_risk_percent:.1f}%)\n🧠 *XGBoost Edge:* {ml_msg} (Conf: {confidence}/5)\n\n🔸 *Spot Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}\n\n👉 Kya mujhe ye trade lena chahiye?"
         
+        # We don't execute yet, just send buttons
         send_msg(AUTHORIZED_USER, msg, inline_kb)
-        return f"🔔 {sym}: Trade Setup Found! Waiting for your Approval." if manual else None
+        
+        # Keep trade info in a pending state
+        # (This dictionary would need to be persistent for a production semi-auto bot,
+        # but for this example, we'll keep it in memory. It would lose state on Render restart)
+        global pending_trades
+        pending_trades[trade_id] = {
+            "sym": sym, "final_decision": final_decision, "exec_price": exec_price, 
+            "sl": sl, "tp": tp, "qty": qty, "features_str": features_str
+        }
+
+        return f"✅ {sym}: Trade Setup Found! Waiting for Approval." if manual else None
         
     return f"⏳ {sym}: No Setup (Conf: {confidence}/5)" if manual else None
 
@@ -703,8 +698,6 @@ def run_scan_cycle(manual=False):
         if valid_results:
             report = "🔍 *Diagnostic Scan Report:*\n\n" + "\n".join(valid_results)
             send_msg(AUTHORIZED_USER, report)
-        else:
-            send_msg(AUTHORIZED_USER, "⚠️ No data received. Checking API Limits...")
 
     return "CONTINUE"
 
@@ -732,14 +725,54 @@ def auto_scanner():
 # ==========================================
 # 🎮 8. COMMAND HANDLER, BACKTEST & INLINE BUTTONS
 # ==========================================
-def process_command(chat_id, txt):
-    global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
+# Keep track of pending trades
+pending_trades = {}
+
+def process_command(chat_id, txt, cb_query_id=None):
+    global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols, pending_trades
     
+    # Handle Callback Queries (Buttons)
+    if txt.startswith("YES_"):
+        trade_id = txt.replace("YES_", "")
+        if trade_id in pending_trades:
+            t = pending_trades.pop(trade_id)
+            ts = int(time.time())
+            
+            if trading_mode == "REAL":
+                place_real_order(t["sym"], t["final_decision"], t["exec_price"], t["qty"])
+                
+            execute_db('INSERT INTO pro_trades (date, date_ts, symbol, type, entry_price, sl, tp, status, pnl, mode, qty, features) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                       (get_ist().strftime("%Y-%m-%d %H:%M"), ts, t["sym"], t["final_decision"], t["exec_price"], t["sl"], t["tp"], "OPEN", 0.0, trading_mode, t["qty"], t["features_str"]))
+            
+            with data_lock: last_trade_time[t["sym"]] = time.time()
+            send_msg(chat_id, f"✅ *APPROVED & EXECUTED!* \nSymbol: {t['sym']} entry triggered.")
+            
+            if cb_query_id:
+                try: requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": cb_query_id, "text": "Trade Approved!"})
+                except: pass
+        else:
+            send_msg(chat_id, "❌ Trade session expired or already processed.")
+        return
+
+    elif txt.startswith("NO_"):
+        trade_id = txt.replace("NO_", "")
+        if trade_id in pending_trades:
+            t = pending_trades.pop(trade_id)
+            send_msg(chat_id, f"🚫 *REJECTED* \nSymbol: {t['sym']} entry cancelled.")
+            if cb_query_id:
+                try: requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": cb_query_id, "text": "Trade Rejected."})
+                except: pass
+        else:
+            send_msg(chat_id, "❌ Trade session expired or already processed.")
+        return
+
+    # Standard Commands
     if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V28.0 Semi-Auto Engine Online.")
     elif txt == "🎛️ Active Markets":
         curr_syms = ", ".join(active_symbols) if active_symbols else "None"
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
         send_msg(chat_id, msg)
+    
     elif txt in ["/backtest", "⚙️ Backtest"]:
         send_msg(chat_id, "📈 Running 180-day DB backtest...")
         rows = execute_db("SELECT date, pnl FROM pro_trades WHERE status!='OPEN' ORDER BY date_ts ASC", fetchall=True)
@@ -823,43 +856,21 @@ def telegram():
                 for upd in res["result"]:
                     last_id = upd["update_id"]
                     
-                    # 🔥 NEW: Handle Button Clicks (Callback Queries)
+                    # Handle Callback Queries (Button Clicks)
                     if "callback_query" in upd:
                         cb = upd["callback_query"]
                         chat_id = cb["message"]["chat"]["id"]
                         if chat_id != AUTHORIZED_USER: continue
-                        cb_data = cb["data"]
+                        
+                        # Process Approve/Reject data
+                        process_command(chat_id, cb["data"], cb["id"])
+                        
+                        # Remove the keyboard after action
                         msg_id = cb["message"]["message_id"]
-                        
-                        try: requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": cb["id"]})
+                        try: requests.post(f"{BASE_URL}/editMessageReplyMarkup", json={"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
                         except: pass
+                        continue
                         
-                        if cb_data.startswith("YES_"):
-                            tid = cb_data.replace("YES_", "")
-                            if tid in pending_trades:
-                                t = pending_trades.pop(tid)
-                                ts = int(time.time())
-                                if trading_mode == "REAL":
-                                    place_real_order(t["sym"], t["final_decision"], t["exec_price"], t["qty"])
-                                
-                                execute_db('INSERT INTO pro_trades (date, date_ts, symbol, type, entry_price, sl, tp, status, pnl, mode, qty, features) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                                           (get_ist().strftime("%Y-%m-%d %H:%M"), ts, t["sym"], t["final_decision"], t["exec_price"], t["sl"], t["tp"], "OPEN", 0.0, trading_mode, t["qty"], t["features_str"]))
-                                with data_lock: last_trade_time[t["sym"]] = time.time()
-                                
-                                send_msg(chat_id, f"✅ *TRADE APPROVED & EXECUTED!* \n🚀 Symbol: {t['sym']} | Qty: {t['qty']}")
-                                try: requests.post(f"{BASE_URL}/editMessageReplyMarkup", json={"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
-                                except: pass
-                            else:
-                                send_msg(chat_id, "❌ Trade session expired or already processed.")
-                                
-                        elif cb_data.startswith("NO_"):
-                            tid = cb_data.replace("NO_", "")
-                            if tid in pending_trades:
-                                t = pending_trades.pop(tid)
-                                send_msg(chat_id, f"🚫 *TRADE REJECTED* \nSymbol: {t['sym']} entry cancelled.")
-                                try: requests.post(f"{BASE_URL}/editMessageReplyMarkup", json={"chat_id": chat_id, "message_id": msg_id, "reply_markup": {"inline_keyboard": []}})
-                                except: pass
-                    
                     elif "message" in upd and "text" in upd["message"]:
                         chat_id, txt = upd["message"]["chat"]["id"], upd["message"]["text"]
                         if chat_id != AUTHORIZED_USER: send_msg(chat_id, "❌ *UNAUTHORIZED ACCESS.*"); continue
