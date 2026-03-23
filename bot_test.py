@@ -18,13 +18,14 @@ from queue import Queue
 from flask import Flask, render_template_string, jsonify, request
 from waitress import serve 
 
-# 🔥 UPGRADE: Replaced dead TVDatafeed with Yahoo Finance
+# 🔥 FIX: Replaced dead tvDatafeed with yfinance
 import yfinance as yf
 
 # 🔥 UPGRADE 1: XGBoost & ML Models
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 
+# 🔥 UPGRADE 4: AliceBlue Placeholder
 try:
     from alice_blue import AliceBlue
 except ImportError:
@@ -135,7 +136,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V27.0 Yahoo Finance</h1><p class="text-xs text-slate-400">Anti-Block Engine Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.5 God Mode</h1><p class="text-xs text-slate-400">Diagnostic Scanner Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
 
 <h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
 <div class="grid grid-cols-2 gap-2 mb-6">
@@ -295,8 +296,6 @@ def get_ml_prediction(rsi, macd, dist, pcr, vix, smc_score):
 
 last_vix = 1.0
 last_vix_time = 0
-
-# 🔥 YFinance powered VIX Fetch
 def get_vix_multiplier():
     global last_vix, last_vix_time
     if time.time() - last_vix_time < 300: return last_vix
@@ -416,14 +415,13 @@ def process_single_symbol(sym, manual=False):
     global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode 
     
     if bot_paused: return f"⏸ {sym}: Paused" if manual else None
-    if is_news_time(): return f"📰 {sym}: News Block" if manual else None
+    if is_news_time(): return f"📰 {sym}: News Time Block" if manual else None
     
     with data_lock:
         if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return f"⏳ {sym}: Cooldown" if manual else None
     
     time.sleep(random.uniform(2.0, 5.0))
     
-    # 🔥 UPGRADE: Yahoo Finance Data Fetching Engine (Bypass TVDatafeed Block)
     yf_sym = yf_symbol_map.get(sym, sym)
     try:
         d1 = yf.download(yf_sym, period='2d', interval='1m', progress=False)
@@ -432,7 +430,6 @@ def process_single_symbol(sym, manual=False):
         
         if d5.empty or d15.empty: return f"❌ {sym}: YF Data Empty" if manual else None
         
-        # Robust extraction for newer yfinance multi-index versions
         data_1m = pd.DataFrame({'close': d1['Close'].iloc[:, 0] if isinstance(d1.columns, pd.MultiIndex) else d1['Close']})
         data_5m = pd.DataFrame({
             'close': d5['Close'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['Close'],
@@ -524,7 +521,7 @@ def process_single_symbol(sym, manual=False):
     
     rsi_buy, rsi_sell = (60, 40) if strategy_mode == "SAFE" else (50, 50)
     dist_ema = (abs(cp - ema200) / ema200) * 100
-    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return f"📈 {sym}: Far from EMA ({dist_ema:.1f}%)" if manual else None
+    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return f"📈 {sym}: Far from EMA" if manual else None
 
     spread = data_5m['high'].iloc[-1] - data_5m['low'].iloc[-1]
     if (spread / cp) > 0.003: return f"🛑 {sym}: High Spread" if manual else None
@@ -577,7 +574,7 @@ def process_single_symbol(sym, manual=False):
         smc_score = 1 if smc_signal == "SMC_BULLISH" else (-1 if smc_signal == "SMC_BEARISH" else 0)
         ml_prob = get_ml_prediction(rsi, macd.iloc[-1], dist_ema, pcr, vix_multi, smc_score)
         
-        if ml_prob is not None and ml_prob < 50.0: return f"🤖 {sym}: ML Rejected Trade" if manual else None
+        if ml_prob is not None and ml_prob < 50.0: return f"🤖 {sym}: ML AI Rejected Trade" if manual else None
         ml_msg = f"{ml_prob:.1f}%" if ml_prob else "Training..."
         
         features_str = f"RSI:{rsi:.1f},MACD:{macd.iloc[-1]:.2f},DIST:{dist_ema:.1f},PCR:{pcr:.2f},VIX:{vix_multi:.2f},SMC:{smc_score}"
@@ -600,7 +597,7 @@ def process_single_symbol(sym, manual=False):
 
         dynamic_capital = max(50000, 50000 + total_pnl)
         
-        if sl_dist <= 0: return f"❌ {sym}: SL Math Error" if manual else None
+        if sl_dist <= 0: return f"❌ {sym}: Math SL Error" if manual else None
 
         rr_ratio = abs(tp - exec_price) / sl_dist if sl_dist > 0 else 0
         if rr_ratio > 0:
@@ -685,13 +682,11 @@ def run_scan_cycle(manual=False):
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(lambda s: process_single_symbol(s, manual), active_symbols))
         
-    # 🔥 DIAGNOSTIC MESSAGE SENDER
     if manual:
         valid_results = [r for r in results if r]
         if valid_results:
-            send_msg(AUTHORIZED_USER, "🔍 *Diagnostic Report:*\n\n" + "\n".join(valid_results))
-        else:
-            send_msg(AUTHORIZED_USER, "⚠️ No data received. Checking API Limits...")
+            report = "🔍 *Diagnostic Scan Report:*\n\n" + "\n".join(valid_results)
+            send_msg(AUTHORIZED_USER, report)
 
     return "CONTINUE"
 
@@ -785,7 +780,7 @@ def process_command(chat_id, txt):
                     total_live += pnl; msg += f"🔹 {sym} ({qty} qty): ₹{pnl:.2f}\n"
                 except: pass
             send_msg(chat_id, msg + f"\n💰 *Total Floating:* ₹{total_live:.2f}")
-    elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [send_msg(chat_id, "🔍 Parallel Scan Running..."), run_scan_cycle(True), scan_lock.release()])).start()
+    elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [run_scan_cycle(True), scan_lock.release()])).start()
     elif txt == "🛡️ Safe Mode": strategy_mode = "SAFE"; send_msg(chat_id, "🛡️ Safe Mode ON.")
     elif txt == "⚡ Aggressive Mode": strategy_mode = "AGGRESSIVE"; send_msg(chat_id, "⚡ Aggressive Mode ON.")
     elif txt in ["❌ Close All", "/closeall"]:
