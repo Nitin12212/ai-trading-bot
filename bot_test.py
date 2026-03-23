@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from tvDatafeed import TvDatafeed, Interval
 from flask import Flask, render_template_string, jsonify, request
-from waitress import serve
+from waitress import serve 
 
 # 🔥 UPGRADE 1: XGBoost & ML Models
 import xgboost as xgb
@@ -47,6 +47,7 @@ if AUTHORIZED_USER == 0: logging.error("🚨 CRITICAL: AUTHORIZED_USER not set!"
 
 scan_lock = Lock()
 data_lock = Lock() 
+tv_lock = Lock() # 🛠️ FIX 1: New Lock to prevent TradingView API Ban
 
 IST = ZoneInfo("Asia/Kolkata")
 def get_ist(): return datetime.now(IST)
@@ -415,38 +416,41 @@ def calc_macd(data):
     ema26 = data['close'].ewm(span=26, adjust=False).mean()
     return ema12 - ema26, (ema12 - ema26).ewm(span=9, adjust=False).mean()
 
-# 🔥 🛠️ FIX 3: Diagnostic mode. Ab function return karega reason ki usne trade kyu reject kiya!
-def process_single_symbol(sym):
+# 🛠️ FIX: Added manual flag to return diagnostic messages instead of None
+def process_single_symbol(sym, manual=False):
     global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode 
     
-    if bot_paused: return f"⏸ {sym}: Bot is Paused"
-    if is_news_time(): return f"📰 {sym}: News Time Block"
+    if bot_paused: return f"⏸ {sym}: Paused" if manual else None
+    if is_news_time(): return f"📰 {sym}: News Time Block" if manual else None
     
     with data_lock:
-        if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return f"⏳ {sym}: Cooldown Period"
+        if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return f"⏳ {sym}: Cooldown" if manual else None
     
     time.sleep(random.uniform(2.0, 5.0))
     tv = safe_tv_get()
-    
     exch = 'BSE' if sym in ['SENSEX', 'BANKEX'] else 'NSE'
     
-    try:
-        data_1m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=100) 
-        data_5m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_5_minute, n_bars=250)
-        data_15m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_15_minute, n_bars=100)
-    except: global tv_instance; tv_instance = None; return f"❌ {sym}: TVDatafeed API Failure"
+    # 🛠️ FIX 1: Thread-Safe TV Data Fetch using Lock
+    with tv_lock:
+        try:
+            data_1m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=100) 
+            data_5m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_5_minute, n_bars=250)
+            data_15m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_15_minute, n_bars=100)
+        except: 
+            global tv_instance; tv_instance = None
+            return f"❌ {sym}: TVDatafeed Blocked" if manual else None
 
-    if data_5m is None or data_5m.empty or len(data_5m) < 20: return f"❌ {sym}: Not enough 5m data from TV"
-    if data_15m is None or data_15m.empty or len(data_15m) < 20: return f"❌ {sym}: Not enough 15m data from TV"
+    if data_5m is None or data_5m.empty or len(data_5m) < 20: return f"❌ {sym}: No 5m Data" if manual else None
+    if data_15m is None or data_15m.empty or len(data_15m) < 20: return f"❌ {sym}: No 15m Data" if manual else None
     
     cp = data_5m['close'].iloc[-1]
     
     if 'volume' in data_5m.columns and data_5m['volume'].iloc[-1] > 0:
         volume_avg = data_5m['volume'].rolling(20).mean().iloc[-1]
-        if pd.notna(volume_avg) and data_5m['volume'].iloc[-1] < volume_avg: return f"📉 {sym}: Volume below average"
+        if pd.notna(volume_avg) and data_5m['volume'].iloc[-1] < volume_avg: return f"📉 {sym}: Low Volume" if manual else None
 
     atr = (data_5m['high'] - data_5m['low']).rolling(14).mean().iloc[-1]
-    if pd.isna(atr) or (atr / cp) < 0.0002: return f"📉 {sym}: Market Volatility too low (ATR)"
+    if pd.isna(atr) or (atr / cp) < 0.0002: return f"📉 {sym}: Low Volatility (ATR)" if manual else None
     
     ema200 = data_5m['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     trend_15m_up = data_15m['close'].iloc[-1] > data_15m['close'].ewm(span=50).mean().iloc[-1]
@@ -455,14 +459,14 @@ def process_single_symbol(sym):
     gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     loss_safe = -delta.clip(upper=0).ewm(alpha=1/14, adjust=False).mean()
     
-    if loss_safe.isna().any() or loss_safe.iloc[-1] == 0: return f"➖ {sym}: Flat market (RSI failure)"
+    if loss_safe.isna().any() or loss_safe.iloc[-1] == 0: return f"➖ {sym}: Flat Market" if manual else None
     
     rs = gain / loss_safe
-    if rs.isna().any() or rs.iloc[-1] <= 0: return f"➖ {sym}: Flat market (RS error)"
+    if rs.isna().any() or rs.iloc[-1] <= 0: return f"➖ {sym}: RS Error" if manual else None
     rsi = 100 - (100 / (1 + rs)).iloc[-1]
     
     macd, macd_sig = calc_macd(data_5m)
-    if len(macd) < 2 or len(macd_sig) < 2: return f"❌ {sym}: MACD Math error"
+    if len(macd) < 2 or len(macd_sig) < 2: return f"❌ {sym}: MACD Error" if manual else None
     
     open_trades = execute_db("SELECT id, type, entry_price, sl, tp, pnl, partial_exit, qty, date_ts FROM pro_trades WHERE symbol=%s AND status='OPEN'", (sym,), fetchall=True)
     if open_trades:
@@ -512,27 +516,22 @@ def process_single_symbol(sym):
             if status != "OPEN":
                 execute_db("UPDATE pro_trades SET status=%s, pnl=%s WHERE id=%s", (status, pnl, t_id))
                 if not alerts_muted: send_msg(AUTHORIZED_USER, msg)
-        return f"🔄 {sym}: Trade Managed"
+        return f"🔄 {sym}: Open Trade Managed" if manual else None
     
     rsi_buy, rsi_sell = (60, 40) if strategy_mode == "SAFE" else (50, 50)
     dist_ema = (abs(cp - ema200) / ema200) * 100
-    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return f"📈 {sym}: Far from EMA Filter ({dist_ema:.1f}%)"
+    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return f"📈 {sym}: Far from EMA" if manual else None
 
     spread = data_5m['high'].iloc[-1] - data_5m['low'].iloc[-1]
-    if (spread / cp) > 0.003: return f"🛑 {sym}: High Spread / Low Liquidity"
+    if (spread / cp) > 0.003: return f"🛑 {sym}: High Spread" if manual else None
     
     trend_strength = abs(macd.iloc[-1] - macd_sig.iloc[-1])
-    if trend_strength < 0.01: return f"➖ {sym}: MACD Trend too weak"
+    if trend_strength < 0.01: return f"➖ {sym}: Weak MACD Trend" if manual else None
 
     vix_multi = get_vix_multiplier()
     pcr = get_pcr(sym)
     smc_signal = check_smc(data_5m)
     
-    try:
-        data_1m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=10)
-        momentum_1m_up = data_1m['close'].iloc[-1] > data_1m['close'].iloc[-3] if data_1m is not None and not data_1m.empty else False
-    except: momentum_1m_up = False
-
     decision = "WAIT"
     
     confidence = 0
@@ -542,41 +541,41 @@ def process_single_symbol(sym):
         if trend_15m_up: confidence += 1
         if pcr >= 0.8: confidence += 1
         if smc_signal == "SMC_BULLISH": confidence += 1
-        if confidence >= 3: decision = "BUY 🟢"
+        if confidence >= 2: decision = "BUY 🟢" # 🛠️ FIX 2: Lowered required confidence to 2 for more trades
     elif cp < ema200:
         if rsi < rsi_sell: confidence += 1
         if macd.iloc[-1] < macd_sig.iloc[-1]: confidence += 1
         if not trend_15m_up: confidence += 1
         if pcr <= 1.2: confidence += 1
         if smc_signal == "SMC_BEARISH": confidence += 1
-        if confidence >= 3: decision = "SELL 🔴"
+        if confidence >= 2: decision = "SELL 🔴"
 
-    prev_close = data_5m['close'].iloc[-2]
+    prev_high = data_5m['high'].iloc[-2]
+    prev_low = data_5m['low'].iloc[-2]
     
     with data_lock:
         past_signal = last_signal.get(sym, "WAIT")
 
-    if decision == "BUY 🟢" and cp <= prev_close: decision = "WAIT"
-    if decision == "SELL 🔴" and cp >= prev_close: decision = "WAIT"
-    
-    if get_sentiment(sym) == -1 and decision == "BUY 🟢": return f"📰 {sym}: Sentiment blocked BUY"
-    if get_sentiment(sym) == 1 and decision == "SELL 🔴": return f"📰 {sym}: Sentiment blocked SELL"
+    if get_sentiment(sym) == -1 and decision == "BUY 🟢": return f"📰 {sym}: Sentiment Blocked BUY" if manual else None
+    if get_sentiment(sym) == 1 and decision == "SELL 🔴": return f"📰 {sym}: Sentiment Blocked SELL" if manual else None
 
     with data_lock:
-        if sym in last_signal and last_signal[sym] == decision: return f"♻️ {sym}: Already in Memory"
+        if sym in last_signal and last_signal[sym] == decision:
+            if decision == "WAIT": return f"⏳ {sym}: No Setup (Conf: {confidence}/5)" if manual else None
+            return None
         last_signal[sym] = decision
 
     if decision != "WAIT":
         smc_score = 1 if smc_signal == "SMC_BULLISH" else (-1 if smc_signal == "SMC_BEARISH" else 0)
         ml_prob = get_ml_prediction(rsi, macd.iloc[-1], dist_ema, pcr, vix_multi, smc_score)
         
-        if ml_prob is not None and ml_prob < 55.0: return f"🤖 {sym}: ML AI rejected the trade"
+        if ml_prob is not None and ml_prob < 50.0: return f"🤖 {sym}: ML AI Rejected Trade" if manual else None
         ml_msg = f"{ml_prob:.1f}%" if ml_prob else "Training..."
         
         features_str = f"RSI:{rsi:.1f},MACD:{macd.iloc[-1]:.2f},DIST:{dist_ema:.1f},PCR:{pcr:.2f},VIX:{vix_multi:.2f},SMC:{smc_score}"
         
         slippage = max(spread * 0.1, cp * 0.0002) 
-        if slippage > (cp * 0.002): return f"🛑 {sym}: Slippage limit exceeded"
+        if slippage > (cp * 0.002): return f"🛑 {sym}: Slippage Limit Hit" if manual else None
         
         exec_price = cp + slippage if "BUY" in decision else cp - slippage
         
@@ -593,7 +592,7 @@ def process_single_symbol(sym):
 
         dynamic_capital = max(50000, 50000 + total_pnl)
         
-        if sl_dist <= 0: return f"❌ {sym}: SL Math Error"
+        if sl_dist <= 0: return f"❌ {sym}: Math SL Error" if manual else None
 
         rr_ratio = abs(tp - exec_price) / sl_dist if sl_dist > 0 else 0
         if rr_ratio > 0:
@@ -602,7 +601,7 @@ def process_single_symbol(sym):
             if kelly > 0:
                 adjusted_risk_percent = min(adjusted_risk_percent, max(0.5, kelly * 100 * 0.5))
             else:
-                return f"📉 {sym}: Kelly blocked poor RR setup"
+                return f"📉 {sym}: Kelly Blocked Trade" if manual else None
 
         base_qty = (dynamic_capital * (adjusted_risk_percent / 100)) / sl_dist
         lot_size = options_lot_size.get(sym, 1) 
@@ -618,7 +617,7 @@ def process_single_symbol(sym):
         elif "SELL" in decision:
             opt_type = f"{atm_strike} PE"
             hedge_type = f"{atm_strike + (strike_step*2)} CE"
-        else: return f"❌ {sym}: Invalid Direction"
+        else: return f"❌ {sym}: Action Error" if manual else None
             
         final_decision = f"{decision} | {opt_type} (Hedge: {hedge_type})"
 
@@ -633,16 +632,14 @@ def process_single_symbol(sym):
         
         if not alerts_muted:
             send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} QUANT EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🎯 *Target Opt:* {opt_type}\n🛡️ *Hedge Opt:* {hedge_type}\n🛒 *Qty:* {qty} (Risk {adjusted_risk_percent:.1f}%)\n🧠 *XGBoost Edge:* {ml_msg} (Conf: {confidence}/5)\n\n🔸 *Spot Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}")
-            
-        return f"✅ {sym}: Trade Executed!"
+
+        return f"✅ {sym}: Trade Executed!" if manual else None
         
-    return f"⏳ {sym}: No Setup (Conf: {confidence}/5)" # Default wait string
+    return f"⏳ {sym}: No Setup (Conf: {confidence}/5)" if manual else None
 
 def run_scan_cycle(manual=False):
     global bot_paused, current_risk_percent
     now = get_ist()
-    
-    # 🛠️ FIX 3: Continuous full day running!
     m1_start, m1_end = dt_time(9, 15), dt_time(15, 30)
     if not manual and not (m1_start <= now.time() <= m1_end): return "SKIP" 
             
@@ -678,14 +675,16 @@ def run_scan_cycle(manual=False):
         return "PAUSE"
 
     with ThreadPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(process_single_symbol, active_symbols))
+        results = list(executor.map(lambda s: process_single_symbol(s, manual), active_symbols))
         
-    # 🛠️ FIX 3: Diagnostic Report output on Telegram!
+    # 🛠️ FIX 3: Detailed Diagnostic Output!
     if manual:
         valid_results = [r for r in results if r]
         if valid_results:
             report = "🔍 *Diagnostic Scan Report:*\n\n" + "\n".join(valid_results)
             send_msg(AUTHORIZED_USER, report)
+        else:
+            send_msg(AUTHORIZED_USER, "⚠️ No data received from market. (TVDatafeed Rate Limit)")
 
     return "CONTINUE"
 
@@ -778,7 +777,7 @@ def process_command(chat_id, txt):
                     total_live += pnl; msg += f"🔹 {sym} ({qty} qty): ₹{pnl:.2f}\n"
                 except: pass
             send_msg(chat_id, msg + f"\n💰 *Total Floating:* ₹{total_live:.2f}")
-    elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [run_scan_cycle(True), scan_lock.release()])).start()
+    elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [send_msg(chat_id, "🔍 Parallel Scan Running..."), run_scan_cycle(True), scan_lock.release()])).start()
     elif txt == "🛡️ Safe Mode": strategy_mode = "SAFE"; send_msg(chat_id, "🛡️ Safe Mode ON.")
     elif txt == "⚡ Aggressive Mode": strategy_mode = "AGGRESSIVE"; send_msg(chat_id, "⚡ Aggressive Mode ON.")
     elif txt in ["❌ Close All", "/closeall"]:
