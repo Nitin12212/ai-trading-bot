@@ -17,13 +17,12 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from tvDatafeed import TvDatafeed, Interval
 from flask import Flask, render_template_string, jsonify, request
-from waitress import serve # 🛠️ FIX: Removes the Red WSGI Warning
+from waitress import serve 
 
 # 🔥 UPGRADE 1: XGBoost & ML Models
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 
-# 🔥 UPGRADE 4: AliceBlue Placeholder
 try:
     from alice_blue import AliceBlue
 except ImportError:
@@ -134,7 +133,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.3 God Mode</h1><p class="text-xs text-slate-400">ATR SL + Finnhub AI</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.4 God Mode</h1><p class="text-xs text-slate-400">ATR SL + Smart Qty + XGBoost</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
 
 <h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
 <div class="grid grid-cols-2 gap-2 mb-6">
@@ -359,7 +358,6 @@ def is_news_time():
         return False
     except: return False
 
-# 🛠️ FIX 1: Sentiment Neutral Fallback
 def get_sentiment(sym):
     try:
         api_key = os.getenv("FINNHUB_API_KEY")
@@ -441,7 +439,6 @@ def process_single_symbol(sym):
     
     cp = data_5m['close'].iloc[-1]
     
-    # 🛠️ FIX 2: Smart Volume Check
     if 'volume' in data_5m.columns and data_5m['volume'].iloc[-1] > 0:
         volume_avg = data_5m['volume'].rolling(20).mean().iloc[-1]
         if pd.notna(volume_avg) and data_5m['volume'].iloc[-1] < volume_avg: return 
@@ -552,14 +549,11 @@ def process_single_symbol(sym):
         if smc_signal == "SMC_BEARISH": confidence += 1
         if confidence >= 3: decision = "SELL 🔴"
 
-    prev_high = data_5m['high'].iloc[-2]
-    prev_low = data_5m['low'].iloc[-2]
-    
-    with data_lock:
-        past_signal = last_signal.get(sym, "WAIT")
+    prev_close = data_5m['close'].iloc[-2]
 
-    if decision == "BUY 🟢" and not (cp > prev_high or (past_signal.startswith("BUY") and cp > prev_high)): decision = "WAIT"
-    if decision == "SELL 🔴" and not (cp < prev_low or (past_signal.startswith("SELL") and cp < prev_low)): decision = "WAIT"
+    # 🛠️ FIX 2: Much smarter and realistic breakout checks (Checks if current close is just in the correct direction relative to previous close)
+    if decision == "BUY 🟢" and cp <= prev_close: decision = "WAIT"
+    if decision == "SELL 🔴" and cp >= prev_close: decision = "WAIT"
     
     if get_sentiment(sym) == -1 and decision == "BUY 🟢": decision = "WAIT"
     if get_sentiment(sym) == 1 and decision == "SELL 🔴": decision = "WAIT"
@@ -608,9 +602,9 @@ def process_single_symbol(sym):
 
         base_qty = (dynamic_capital * (adjusted_risk_percent / 100)) / sl_dist
         lot_size = options_lot_size.get(sym, 1) 
-        qty = int(base_qty // lot_size) * lot_size
-        if qty < lot_size: return 
-
+        # 🛠️ FIX 1: Guaranteed to take at least 1 lot! (This was silently blocking Nifty and BankNifty trades)
+        qty = max(lot_size, int(base_qty // lot_size) * lot_size) 
+        
         strike_step = 100 if sym in ["BANKNIFTY", "SENSEX", "BANKEX"] else 50
         atm_strike = int(round(cp / strike_step) * strike_step)
         
@@ -706,7 +700,7 @@ def auto_scanner():
 def process_command(chat_id, txt):
     global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
     
-    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.3 God Mode Engine Online.")
+    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.4 God Mode Engine Online.")
     elif txt == "🎛️ Active Markets":
         curr_syms = ", ".join(active_symbols) if active_symbols else "None"
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
