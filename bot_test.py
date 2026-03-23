@@ -15,9 +15,11 @@ from zoneinfo import ZoneInfo
 from threading import Thread, Lock
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
-from tvDatafeed import TvDatafeed, Interval
 from flask import Flask, render_template_string, jsonify, request
 from waitress import serve 
+
+# 🔥 UPGRADE: Replaced dead TVDatafeed with Yahoo Finance
+import yfinance as yf
 
 # 🔥 UPGRADE 1: XGBoost & ML Models
 import xgboost as xgb
@@ -47,7 +49,6 @@ if AUTHORIZED_USER == 0: logging.error("🚨 CRITICAL: AUTHORIZED_USER not set!"
 
 scan_lock = Lock()
 data_lock = Lock() 
-tv_lock = Lock() # 🛠️ FIX 1: New Lock to prevent TradingView API Ban
 
 IST = ZoneInfo("Asia/Kolkata")
 def get_ist(): return datetime.now(IST)
@@ -134,7 +135,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.5 God Mode</h1><p class="text-xs text-slate-400">Diagnostic Scanner Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V27.0 Yahoo Finance</h1><p class="text-xs text-slate-400">Anti-Block Engine Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
 
 <h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
 <div class="grid grid-cols-2 gap-2 mb-6">
@@ -294,14 +295,15 @@ def get_ml_prediction(rsi, macd, dist, pcr, vix, smc_score):
 
 last_vix = 1.0
 last_vix_time = 0
+
+# 🔥 YFinance powered VIX Fetch
 def get_vix_multiplier():
     global last_vix, last_vix_time
     if time.time() - last_vix_time < 300: return last_vix
     try:
-        tv = TvDatafeed()
-        vix_data = tv.get_hist(symbol='INDIAVIX', exchange='NSE', interval=Interval.in_daily, n_bars=2)
+        vix_data = yf.download('^INDIAVIX', period='5d', interval='1d', progress=False)
         if vix_data is not None and not vix_data.empty:
-            vix = vix_data['close'].iloc[-1]
+            vix = vix_data['Close'].iloc[-1, 0] if isinstance(vix_data.columns, pd.MultiIndex) else vix_data['Close'].iloc[-1]
             last_vix_time = time.time()
             if vix > 22: last_vix = 0.5   
             elif vix < 13: last_vix = 1.5 
@@ -403,42 +405,44 @@ last_trade_time = {}
 active_symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE', 'SENSEX', 'BANKEX'] 
 
 options_lot_size = {"NIFTY": 50, "BANKNIFTY": 15, "CNXFINANCE": 40, "SENSEX": 10, "BANKEX": 15} 
-
-tv_instance = None
-def safe_tv_get():
-    global tv_instance
-    if tv_instance is not None: return tv_instance
-    try: tv_instance = TvDatafeed(); return tv_instance
-    except Exception: time.sleep(2); tv_instance = TvDatafeed(); return tv_instance
+yf_symbol_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "CNXFINANCE": "NIFTY_FIN_SERVICE.NS", "SENSEX": "^BSESN", "BANKEX": "BSE-BANK.BO"}
 
 def calc_macd(data):
     ema12 = data['close'].ewm(span=12, adjust=False).mean()
     ema26 = data['close'].ewm(span=26, adjust=False).mean()
     return ema12 - ema26, (ema12 - ema26).ewm(span=9, adjust=False).mean()
 
-# 🛠️ FIX: Added manual flag to return diagnostic messages instead of None
 def process_single_symbol(sym, manual=False):
     global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode 
     
     if bot_paused: return f"⏸ {sym}: Paused" if manual else None
-    if is_news_time(): return f"📰 {sym}: News Time Block" if manual else None
+    if is_news_time(): return f"📰 {sym}: News Block" if manual else None
     
     with data_lock:
         if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return f"⏳ {sym}: Cooldown" if manual else None
     
     time.sleep(random.uniform(2.0, 5.0))
-    tv = safe_tv_get()
-    exch = 'BSE' if sym in ['SENSEX', 'BANKEX'] else 'NSE'
     
-    # 🛠️ FIX 1: Thread-Safe TV Data Fetch using Lock
-    with tv_lock:
-        try:
-            data_1m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=100) 
-            data_5m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_5_minute, n_bars=250)
-            data_15m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_15_minute, n_bars=100)
-        except: 
-            global tv_instance; tv_instance = None
-            return f"❌ {sym}: TVDatafeed Blocked" if manual else None
+    # 🔥 UPGRADE: Yahoo Finance Data Fetching Engine (Bypass TVDatafeed Block)
+    yf_sym = yf_symbol_map.get(sym, sym)
+    try:
+        d1 = yf.download(yf_sym, period='2d', interval='1m', progress=False)
+        d5 = yf.download(yf_sym, period='5d', interval='5m', progress=False)
+        d15 = yf.download(yf_sym, period='5d', interval='15m', progress=False)
+        
+        if d5.empty or d15.empty: return f"❌ {sym}: YF Data Empty" if manual else None
+        
+        # Robust extraction for newer yfinance multi-index versions
+        data_1m = pd.DataFrame({'close': d1['Close'].iloc[:, 0] if isinstance(d1.columns, pd.MultiIndex) else d1['Close']})
+        data_5m = pd.DataFrame({
+            'close': d5['Close'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['Close'],
+            'high': d5['High'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['High'],
+            'low': d5['Low'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['Low'],
+            'volume': d5['Volume'].iloc[:, 0] if isinstance(d5.columns, pd.MultiIndex) else d5['Volume']
+        })
+        data_15m = pd.DataFrame({'close': d15['Close'].iloc[:, 0] if isinstance(d15.columns, pd.MultiIndex) else d15['Close']})
+    except Exception as e:
+        return f"❌ {sym}: YF API Error" if manual else None
 
     if data_5m is None or data_5m.empty or len(data_5m) < 20: return f"❌ {sym}: No 5m Data" if manual else None
     if data_15m is None or data_15m.empty or len(data_15m) < 20: return f"❌ {sym}: No 15m Data" if manual else None
@@ -516,11 +520,11 @@ def process_single_symbol(sym, manual=False):
             if status != "OPEN":
                 execute_db("UPDATE pro_trades SET status=%s, pnl=%s WHERE id=%s", (status, pnl, t_id))
                 if not alerts_muted: send_msg(AUTHORIZED_USER, msg)
-        return f"🔄 {sym}: Open Trade Managed" if manual else None
+        return f"🔄 {sym}: Trade Managed" if manual else None
     
     rsi_buy, rsi_sell = (60, 40) if strategy_mode == "SAFE" else (50, 50)
     dist_ema = (abs(cp - ema200) / ema200) * 100
-    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return f"📈 {sym}: Far from EMA" if manual else None
+    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return f"📈 {sym}: Far from EMA ({dist_ema:.1f}%)" if manual else None
 
     spread = data_5m['high'].iloc[-1] - data_5m['low'].iloc[-1]
     if (spread / cp) > 0.003: return f"🛑 {sym}: High Spread" if manual else None
@@ -532,6 +536,8 @@ def process_single_symbol(sym, manual=False):
     pcr = get_pcr(sym)
     smc_signal = check_smc(data_5m)
     
+    momentum_1m_up = data_1m['close'].iloc[-1] > data_1m['close'].iloc[-3] if data_1m is not None and not data_1m.empty else False
+
     decision = "WAIT"
     
     confidence = 0
@@ -541,7 +547,7 @@ def process_single_symbol(sym, manual=False):
         if trend_15m_up: confidence += 1
         if pcr >= 0.8: confidence += 1
         if smc_signal == "SMC_BULLISH": confidence += 1
-        if confidence >= 2: decision = "BUY 🟢" # 🛠️ FIX 2: Lowered required confidence to 2 for more trades
+        if confidence >= 2: decision = "BUY 🟢" 
     elif cp < ema200:
         if rsi < rsi_sell: confidence += 1
         if macd.iloc[-1] < macd_sig.iloc[-1]: confidence += 1
@@ -550,12 +556,14 @@ def process_single_symbol(sym, manual=False):
         if smc_signal == "SMC_BEARISH": confidence += 1
         if confidence >= 2: decision = "SELL 🔴"
 
-    prev_high = data_5m['high'].iloc[-2]
-    prev_low = data_5m['low'].iloc[-2]
+    prev_close = data_5m['close'].iloc[-2]
     
     with data_lock:
         past_signal = last_signal.get(sym, "WAIT")
 
+    if decision == "BUY 🟢" and cp <= prev_close: decision = "WAIT"
+    if decision == "SELL 🔴" and cp >= prev_close: decision = "WAIT"
+    
     if get_sentiment(sym) == -1 and decision == "BUY 🟢": return f"📰 {sym}: Sentiment Blocked BUY" if manual else None
     if get_sentiment(sym) == 1 and decision == "SELL 🔴": return f"📰 {sym}: Sentiment Blocked SELL" if manual else None
 
@@ -569,7 +577,7 @@ def process_single_symbol(sym, manual=False):
         smc_score = 1 if smc_signal == "SMC_BULLISH" else (-1 if smc_signal == "SMC_BEARISH" else 0)
         ml_prob = get_ml_prediction(rsi, macd.iloc[-1], dist_ema, pcr, vix_multi, smc_score)
         
-        if ml_prob is not None and ml_prob < 50.0: return f"🤖 {sym}: ML AI Rejected Trade" if manual else None
+        if ml_prob is not None and ml_prob < 50.0: return f"🤖 {sym}: ML Rejected Trade" if manual else None
         ml_msg = f"{ml_prob:.1f}%" if ml_prob else "Training..."
         
         features_str = f"RSI:{rsi:.1f},MACD:{macd.iloc[-1]:.2f},DIST:{dist_ema:.1f},PCR:{pcr:.2f},VIX:{vix_multi:.2f},SMC:{smc_score}"
@@ -592,7 +600,7 @@ def process_single_symbol(sym, manual=False):
 
         dynamic_capital = max(50000, 50000 + total_pnl)
         
-        if sl_dist <= 0: return f"❌ {sym}: Math SL Error" if manual else None
+        if sl_dist <= 0: return f"❌ {sym}: SL Math Error" if manual else None
 
         rr_ratio = abs(tp - exec_price) / sl_dist if sl_dist > 0 else 0
         if rr_ratio > 0:
@@ -617,7 +625,7 @@ def process_single_symbol(sym, manual=False):
         elif "SELL" in decision:
             opt_type = f"{atm_strike} PE"
             hedge_type = f"{atm_strike + (strike_step*2)} CE"
-        else: return f"❌ {sym}: Action Error" if manual else None
+        else: return f"❌ {sym}: Invalid Direction" if manual else None
             
         final_decision = f"{decision} | {opt_type} (Hedge: {hedge_type})"
 
@@ -632,7 +640,7 @@ def process_single_symbol(sym, manual=False):
         
         if not alerts_muted:
             send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} QUANT EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🎯 *Target Opt:* {opt_type}\n🛡️ *Hedge Opt:* {hedge_type}\n🛒 *Qty:* {qty} (Risk {adjusted_risk_percent:.1f}%)\n🧠 *XGBoost Edge:* {ml_msg} (Conf: {confidence}/5)\n\n🔸 *Spot Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}")
-
+            
         return f"✅ {sym}: Trade Executed!" if manual else None
         
     return f"⏳ {sym}: No Setup (Conf: {confidence}/5)" if manual else None
@@ -677,14 +685,13 @@ def run_scan_cycle(manual=False):
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(lambda s: process_single_symbol(s, manual), active_symbols))
         
-    # 🛠️ FIX 3: Detailed Diagnostic Output!
+    # 🔥 DIAGNOSTIC MESSAGE SENDER
     if manual:
         valid_results = [r for r in results if r]
         if valid_results:
-            report = "🔍 *Diagnostic Scan Report:*\n\n" + "\n".join(valid_results)
-            send_msg(AUTHORIZED_USER, report)
+            send_msg(AUTHORIZED_USER, "🔍 *Diagnostic Report:*\n\n" + "\n".join(valid_results))
         else:
-            send_msg(AUTHORIZED_USER, "⚠️ No data received from market. (TVDatafeed Rate Limit)")
+            send_msg(AUTHORIZED_USER, "⚠️ No data received. Checking API Limits...")
 
     return "CONTINUE"
 
@@ -715,7 +722,7 @@ def auto_scanner():
 def process_command(chat_id, txt):
     global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
     
-    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.5 Diagnostic Engine Online.")
+    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V27.0 Yahoo Finance Engine Online.")
     elif txt == "🎛️ Active Markets":
         curr_syms = ", ".join(active_symbols) if active_symbols else "None"
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
@@ -766,14 +773,15 @@ def process_command(chat_id, txt):
         rows = execute_db("SELECT symbol, type, entry_price, qty FROM pro_trades WHERE status='OPEN'", fetchall=True)
         if not rows: send_msg(chat_id, "No open trades.")
         else:
-            msg, total_live, tv = "📈 *LIVE OPEN TRADES:*\n\n", 0, safe_tv_get()
+            msg, total_live = "📈 *LIVE OPEN TRADES:*\n\n", 0
             for sym, t_type, entry, qty in rows:
                 try:
                     time.sleep(1)
-                    exch = 'BSE' if sym in ['SENSEX', 'BANKEX'] else 'NSE'
-                    d = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=2)
+                    yf_sym = yf_symbol_map.get(sym, sym)
+                    d = yf.download(yf_sym, period='1d', interval='1m', progress=False)
                     if d is None or d.empty: continue
-                    pnl = ((d['close'].iloc[-1] - entry) if "BUY" in t_type else (entry - d['close'].iloc[-1])) * qty
+                    cp = d['Close'].iloc[-1, 0] if isinstance(d.columns, pd.MultiIndex) else d['Close'].iloc[-1]
+                    pnl = ((cp - entry) if "BUY" in t_type else (entry - cp)) * qty
                     total_live += pnl; msg += f"🔹 {sym} ({qty} qty): ₹{pnl:.2f}\n"
                 except: pass
             send_msg(chat_id, msg + f"\n💰 *Total Floating:* ₹{total_live:.2f}")
