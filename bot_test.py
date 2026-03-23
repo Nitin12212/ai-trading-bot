@@ -134,7 +134,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.1 God Mode</h1><p class="text-xs text-slate-400">ATR SL + Finnhub AI</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.3 God Mode</h1><p class="text-xs text-slate-400">ATR SL + Finnhub AI</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
 
 <h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
 <div class="grid grid-cols-2 gap-2 mb-6">
@@ -400,9 +400,9 @@ global_drawdown_limit = -5000.0
 max_daily_trades = 5          
 trade_cooldown_seconds = 300  
 last_trade_time = {}          
-active_symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE'] 
+active_symbols = ['NIFTY', 'BANKNIFTY', 'CNXFINANCE', 'SENSEX', 'BANKEX'] # 🛠️ FIX 4: SENSEX & BANKEX Added defaults
 
-options_lot_size = {"NIFTY": 50, "BANKNIFTY": 15, "CNXFINANCE": 40}
+options_lot_size = {"NIFTY": 50, "BANKNIFTY": 15, "CNXFINANCE": 40, "SENSEX": 10, "BANKEX": 15} # 🛠️ FIX 4: Updated Lot Sizes
 
 tv_instance = None
 def safe_tv_get():
@@ -427,10 +427,13 @@ def process_single_symbol(sym):
     time.sleep(random.uniform(2.0, 5.0))
     tv = safe_tv_get()
     
+    # 🛠️ FIX 1: Proper Exchange selection to prevent "None" data for BSE symbols
+    exch = 'BSE' if sym in ['SENSEX', 'BANKEX'] else 'NSE'
+    
     try:
-        data_1m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=100) 
-        data_5m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_5_minute, n_bars=250)
-        data_15m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_15_minute, n_bars=100)
+        data_1m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=100) 
+        data_5m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_5_minute, n_bars=250)
+        data_15m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_15_minute, n_bars=100)
     except: global tv_instance; tv_instance = None; return
 
     if data_5m is None or data_5m.empty or len(data_5m) < 20: return
@@ -442,9 +445,8 @@ def process_single_symbol(sym):
     volume_avg = data_5m['volume'].rolling(20).mean().iloc[-1]
     if data_5m['volume'].iloc[-1] < volume_avg: return 
 
-    # 🛠️ FIX: ATR Scoped correctly before Open Trades loop
     atr = (data_5m['high'] - data_5m['low']).rolling(14).mean().iloc[-1]
-    if (atr / cp) < 0.001: return 
+    if (atr / cp) < 0.0002: return # 🛠️ FIX 2: Relaxed ATR filter to allow trades in normal market conditions
     
     ema200 = data_5m['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     trend_15m_up = data_15m['close'].iloc[-1] > data_15m['close'].ewm(span=50).mean().iloc[-1]
@@ -514,20 +516,20 @@ def process_single_symbol(sym):
     
     rsi_buy, rsi_sell = (60, 40) if strategy_mode == "SAFE" else (50, 50)
     dist_ema = (abs(cp - ema200) / ema200) * 100
-    if dist_ema > (0.4 if strategy_mode == "SAFE" else 0.8): return
+    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return # 🛠️ FIX 2: Relaxed EMA distance filter
 
     spread = data_5m['high'].iloc[-1] - data_5m['low'].iloc[-1]
     if (spread / cp) > 0.003: return 
     
     trend_strength = abs(macd.iloc[-1] - macd_sig.iloc[-1])
-    if trend_strength < 0.05: return
+    if trend_strength < 0.01: return 
 
     vix_multi = get_vix_multiplier()
     pcr = get_pcr(sym)
     smc_signal = check_smc(data_5m)
     
     try:
-        data_1m = tv.get_hist(symbol=sym, exchange='NSE', interval=Interval.in_1_minute, n_bars=10)
+        data_1m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=10)
         momentum_1m_up = data_1m['close'].iloc[-1] > data_1m['close'].iloc[-3] if data_1m is not None and not data_1m.empty else False
     except: momentum_1m_up = False
 
@@ -608,14 +610,15 @@ def process_single_symbol(sym):
         qty = int(base_qty // lot_size) * lot_size
         if qty < lot_size: return 
 
-        strike_step = 100 if sym == "BANKNIFTY" else 50
+        strike_step = 100 if sym in ["BANKNIFTY", "SENSEX", "BANKEX"] else 50
         atm_strike = int(round(cp / strike_step) * strike_step)
         
+        # 🛠️ FIX 3: Allowed Opt selection even without 15m trend match (bypassed the harsh block)
         opt_type, hedge_type = "", ""
-        if "BUY" in decision and trend_15m_up:
+        if "BUY" in decision:
             opt_type = f"{atm_strike} CE"
             hedge_type = f"{atm_strike - (strike_step*2)} PE"
-        elif "SELL" in decision and not trend_15m_up:
+        elif "SELL" in decision:
             opt_type = f"{atm_strike} PE"
             hedge_type = f"{atm_strike + (strike_step*2)} CE"
         else: return 
@@ -703,7 +706,7 @@ def auto_scanner():
 def process_command(chat_id, txt):
     global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
     
-    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.2 Flawless Engine Online.")
+    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.3 God Mode Engine Online.")
     elif txt == "🎛️ Active Markets":
         curr_syms = ", ".join(active_symbols) if active_symbols else "None"
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
