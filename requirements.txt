@@ -1,7 +1,7 @@
 requests
 pandas
 flask
-tvdatafeed @ https://github.com/rongardF/tvdatafeed/archive/refs/heads/main.zip
+yfinance==0.2.37
 psycopg2-binary==2.9.9
 xgboost==2.0.3
 scikit-learn==1.3.2
