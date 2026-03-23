@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from tvDatafeed import TvDatafeed, Interval
 from flask import Flask, render_template_string, jsonify, request
-from waitress import serve 
+from waitress import serve
 
 # 🔥 UPGRADE 1: XGBoost & ML Models
 import xgboost as xgb
@@ -133,7 +133,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.4 God Mode</h1><p class="text-xs text-slate-400">ATR SL + Smart Qty + XGBoost</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V26.5 God Mode</h1><p class="text-xs text-slate-400">Diagnostic Scanner Active</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div>
 
 <h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2>
 <div class="grid grid-cols-2 gap-2 mb-6">
@@ -415,13 +415,15 @@ def calc_macd(data):
     ema26 = data['close'].ewm(span=26, adjust=False).mean()
     return ema12 - ema26, (ema12 - ema26).ewm(span=9, adjust=False).mean()
 
+# 🔥 🛠️ FIX 3: Diagnostic mode. Ab function return karega reason ki usne trade kyu reject kiya!
 def process_single_symbol(sym):
     global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode 
     
-    if bot_paused or is_news_time(): return "STOP"
+    if bot_paused: return f"⏸ {sym}: Bot is Paused"
+    if is_news_time(): return f"📰 {sym}: News Time Block"
     
     with data_lock:
-        if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return
+        if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return f"⏳ {sym}: Cooldown Period"
     
     time.sleep(random.uniform(2.0, 5.0))
     tv = safe_tv_get()
@@ -432,19 +434,19 @@ def process_single_symbol(sym):
         data_1m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_1_minute, n_bars=100) 
         data_5m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_5_minute, n_bars=250)
         data_15m = tv.get_hist(symbol=sym, exchange=exch, interval=Interval.in_15_minute, n_bars=100)
-    except: global tv_instance; tv_instance = None; return
+    except: global tv_instance; tv_instance = None; return f"❌ {sym}: TVDatafeed API Failure"
 
-    if data_5m is None or data_5m.empty or len(data_5m) < 20: return
-    if data_15m is None or data_15m.empty or len(data_15m) < 20: return
+    if data_5m is None or data_5m.empty or len(data_5m) < 20: return f"❌ {sym}: Not enough 5m data from TV"
+    if data_15m is None or data_15m.empty or len(data_15m) < 20: return f"❌ {sym}: Not enough 15m data from TV"
     
     cp = data_5m['close'].iloc[-1]
     
     if 'volume' in data_5m.columns and data_5m['volume'].iloc[-1] > 0:
         volume_avg = data_5m['volume'].rolling(20).mean().iloc[-1]
-        if pd.notna(volume_avg) and data_5m['volume'].iloc[-1] < volume_avg: return 
+        if pd.notna(volume_avg) and data_5m['volume'].iloc[-1] < volume_avg: return f"📉 {sym}: Volume below average"
 
     atr = (data_5m['high'] - data_5m['low']).rolling(14).mean().iloc[-1]
-    if pd.isna(atr) or (atr / cp) < 0.0002: return 
+    if pd.isna(atr) or (atr / cp) < 0.0002: return f"📉 {sym}: Market Volatility too low (ATR)"
     
     ema200 = data_5m['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     trend_15m_up = data_15m['close'].iloc[-1] > data_15m['close'].ewm(span=50).mean().iloc[-1]
@@ -453,14 +455,14 @@ def process_single_symbol(sym):
     gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     loss_safe = -delta.clip(upper=0).ewm(alpha=1/14, adjust=False).mean()
     
-    if loss_safe.isna().any() or loss_safe.iloc[-1] == 0: return
+    if loss_safe.isna().any() or loss_safe.iloc[-1] == 0: return f"➖ {sym}: Flat market (RSI failure)"
     
     rs = gain / loss_safe
-    if rs.isna().any() or rs.iloc[-1] <= 0: return
+    if rs.isna().any() or rs.iloc[-1] <= 0: return f"➖ {sym}: Flat market (RS error)"
     rsi = 100 - (100 / (1 + rs)).iloc[-1]
     
     macd, macd_sig = calc_macd(data_5m)
-    if len(macd) < 2 or len(macd_sig) < 2: return
+    if len(macd) < 2 or len(macd_sig) < 2: return f"❌ {sym}: MACD Math error"
     
     open_trades = execute_db("SELECT id, type, entry_price, sl, tp, pnl, partial_exit, qty, date_ts FROM pro_trades WHERE symbol=%s AND status='OPEN'", (sym,), fetchall=True)
     if open_trades:
@@ -510,17 +512,17 @@ def process_single_symbol(sym):
             if status != "OPEN":
                 execute_db("UPDATE pro_trades SET status=%s, pnl=%s WHERE id=%s", (status, pnl, t_id))
                 if not alerts_muted: send_msg(AUTHORIZED_USER, msg)
-        return 
+        return f"🔄 {sym}: Trade Managed"
     
     rsi_buy, rsi_sell = (60, 40) if strategy_mode == "SAFE" else (50, 50)
     dist_ema = (abs(cp - ema200) / ema200) * 100
-    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return 
+    if dist_ema > (1.5 if strategy_mode == "SAFE" else 3.0): return f"📈 {sym}: Far from EMA Filter ({dist_ema:.1f}%)"
 
     spread = data_5m['high'].iloc[-1] - data_5m['low'].iloc[-1]
-    if (spread / cp) > 0.003: return 
+    if (spread / cp) > 0.003: return f"🛑 {sym}: High Spread / Low Liquidity"
     
     trend_strength = abs(macd.iloc[-1] - macd_sig.iloc[-1])
-    if trend_strength < 0.01: return 
+    if trend_strength < 0.01: return f"➖ {sym}: MACD Trend too weak"
 
     vix_multi = get_vix_multiplier()
     pcr = get_pcr(sym)
@@ -550,29 +552,31 @@ def process_single_symbol(sym):
         if confidence >= 3: decision = "SELL 🔴"
 
     prev_close = data_5m['close'].iloc[-2]
+    
+    with data_lock:
+        past_signal = last_signal.get(sym, "WAIT")
 
-    # 🛠️ FIX 2: Much smarter and realistic breakout checks (Checks if current close is just in the correct direction relative to previous close)
     if decision == "BUY 🟢" and cp <= prev_close: decision = "WAIT"
     if decision == "SELL 🔴" and cp >= prev_close: decision = "WAIT"
     
-    if get_sentiment(sym) == -1 and decision == "BUY 🟢": decision = "WAIT"
-    if get_sentiment(sym) == 1 and decision == "SELL 🔴": decision = "WAIT"
+    if get_sentiment(sym) == -1 and decision == "BUY 🟢": return f"📰 {sym}: Sentiment blocked BUY"
+    if get_sentiment(sym) == 1 and decision == "SELL 🔴": return f"📰 {sym}: Sentiment blocked SELL"
 
     with data_lock:
-        if sym in last_signal and last_signal[sym] == decision: return
+        if sym in last_signal and last_signal[sym] == decision: return f"♻️ {sym}: Already in Memory"
         last_signal[sym] = decision
 
     if decision != "WAIT":
         smc_score = 1 if smc_signal == "SMC_BULLISH" else (-1 if smc_signal == "SMC_BEARISH" else 0)
         ml_prob = get_ml_prediction(rsi, macd.iloc[-1], dist_ema, pcr, vix_multi, smc_score)
         
-        if ml_prob is not None and ml_prob < 55.0: return 
+        if ml_prob is not None and ml_prob < 55.0: return f"🤖 {sym}: ML AI rejected the trade"
         ml_msg = f"{ml_prob:.1f}%" if ml_prob else "Training..."
         
         features_str = f"RSI:{rsi:.1f},MACD:{macd.iloc[-1]:.2f},DIST:{dist_ema:.1f},PCR:{pcr:.2f},VIX:{vix_multi:.2f},SMC:{smc_score}"
         
         slippage = max(spread * 0.1, cp * 0.0002) 
-        if slippage > (cp * 0.002): return 
+        if slippage > (cp * 0.002): return f"🛑 {sym}: Slippage limit exceeded"
         
         exec_price = cp + slippage if "BUY" in decision else cp - slippage
         
@@ -589,7 +593,7 @@ def process_single_symbol(sym):
 
         dynamic_capital = max(50000, 50000 + total_pnl)
         
-        if sl_dist <= 0: return
+        if sl_dist <= 0: return f"❌ {sym}: SL Math Error"
 
         rr_ratio = abs(tp - exec_price) / sl_dist if sl_dist > 0 else 0
         if rr_ratio > 0:
@@ -598,11 +602,10 @@ def process_single_symbol(sym):
             if kelly > 0:
                 adjusted_risk_percent = min(adjusted_risk_percent, max(0.5, kelly * 100 * 0.5))
             else:
-                return 
+                return f"📉 {sym}: Kelly blocked poor RR setup"
 
         base_qty = (dynamic_capital * (adjusted_risk_percent / 100)) / sl_dist
         lot_size = options_lot_size.get(sym, 1) 
-        # 🛠️ FIX 1: Guaranteed to take at least 1 lot! (This was silently blocking Nifty and BankNifty trades)
         qty = max(lot_size, int(base_qty // lot_size) * lot_size) 
         
         strike_step = 100 if sym in ["BANKNIFTY", "SENSEX", "BANKEX"] else 50
@@ -615,7 +618,7 @@ def process_single_symbol(sym):
         elif "SELL" in decision:
             opt_type = f"{atm_strike} PE"
             hedge_type = f"{atm_strike + (strike_step*2)} CE"
-        else: return 
+        else: return f"❌ {sym}: Invalid Direction"
             
         final_decision = f"{decision} | {opt_type} (Hedge: {hedge_type})"
 
@@ -630,13 +633,18 @@ def process_single_symbol(sym):
         
         if not alerts_muted:
             send_msg(AUTHORIZED_USER, f"🚀 *{trading_mode} QUANT EXECUTED* 🚀\n\n📈 *Symbol:* {sym}\n🎯 *Target Opt:* {opt_type}\n🛡️ *Hedge Opt:* {hedge_type}\n🛒 *Qty:* {qty} (Risk {adjusted_risk_percent:.1f}%)\n🧠 *XGBoost Edge:* {ml_msg} (Conf: {confidence}/5)\n\n🔸 *Spot Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr_ratio:.1f}")
+            
+        return f"✅ {sym}: Trade Executed!"
+        
+    return f"⏳ {sym}: No Setup (Conf: {confidence}/5)" # Default wait string
 
 def run_scan_cycle(manual=False):
     global bot_paused, current_risk_percent
     now = get_ist()
-    m1_start, m1_end = dt_time(9, 15), dt_time(10, 30)
-    m2_start, m2_end = dt_time(14, 30), dt_time(15, 30)
-    if not manual and not ((m1_start <= now.time() <= m1_end) or (m2_start <= now.time() <= m2_end)): return "SKIP" 
+    
+    # 🛠️ FIX 3: Continuous full day running!
+    m1_start, m1_end = dt_time(9, 15), dt_time(15, 30)
+    if not manual and not (m1_start <= now.time() <= m1_end): return "SKIP" 
             
     today = now.strftime("%Y-%m-%d")
     total_pnl = get_val("SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'")
@@ -670,7 +678,15 @@ def run_scan_cycle(manual=False):
         return "PAUSE"
 
     with ThreadPoolExecutor(max_workers=5) as executor:
-        executor.map(process_single_symbol, active_symbols)
+        results = list(executor.map(process_single_symbol, active_symbols))
+        
+    # 🛠️ FIX 3: Diagnostic Report output on Telegram!
+    if manual:
+        valid_results = [r for r in results if r]
+        if valid_results:
+            report = "🔍 *Diagnostic Scan Report:*\n\n" + "\n".join(valid_results)
+            send_msg(AUTHORIZED_USER, report)
+
     return "CONTINUE"
 
 def auto_scanner():
@@ -700,7 +716,7 @@ def auto_scanner():
 def process_command(chat_id, txt):
     global bot_paused, trading_mode, strategy_mode, alerts_muted, max_daily_trades, active_symbols
     
-    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.4 God Mode Engine Online.")
+    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V26.5 Diagnostic Engine Online.")
     elif txt == "🎛️ Active Markets":
         curr_syms = ", ".join(active_symbols) if active_symbols else "None"
         msg = f"🎛️ *Active Markets:* {curr_syms}\n\nType `/add SYMBOL` or `/remove SYMBOL` to change.\nExample: `/add RELIANCE`"
@@ -762,7 +778,7 @@ def process_command(chat_id, txt):
                     total_live += pnl; msg += f"🔹 {sym} ({qty} qty): ₹{pnl:.2f}\n"
                 except: pass
             send_msg(chat_id, msg + f"\n💰 *Total Floating:* ₹{total_live:.2f}")
-    elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [send_msg(chat_id, "🔍 Parallel Scan Running..."), run_scan_cycle(True), scan_lock.release()])).start()
+    elif txt == "🔍 Scan Now": Thread(target=lambda: (scan_lock.acquire(blocking=False) and [run_scan_cycle(True), scan_lock.release()])).start()
     elif txt == "🛡️ Safe Mode": strategy_mode = "SAFE"; send_msg(chat_id, "🛡️ Safe Mode ON.")
     elif txt == "⚡ Aggressive Mode": strategy_mode = "AGGRESSIVE"; send_msg(chat_id, "⚡ Aggressive Mode ON.")
     elif txt in ["❌ Close All", "/closeall"]:
