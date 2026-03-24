@@ -40,7 +40,6 @@ DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://ai-trading-bot-itc0.onrender
 
 try: AUTHORIZED_USER = int(os.getenv("AUTHORIZED_USER", "0"))
 except: AUTHORIZED_USER = 0
-if AUTHORIZED_USER == 0: logging.error("🚨 CRITICAL: AUTHORIZED_USER not set!")
 
 # Shoonya Environment Variables
 SHOONYA_USER = os.getenv("SHOONYA_USER")
@@ -70,21 +69,20 @@ if DB_URL:
             database=result.path[1:],
             sslmode='require'
         )
-        logging.info("✅ PostgreSQL Pool Initialized.")
     except Exception as e: logging.error(f"❌ DB pool error: {e}")
 
-nse_session = requests.Session()
-nse_session.headers.update({
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com/"
+# 🔥 FIX 1: The Anti-Ban Fake Human Session for Yahoo Finance
+yf_session = requests.Session()
+yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Connection": "keep-alive"
 })
 
+nse_session = requests.Session()
+nse_session.headers.update({"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
 def refresh_nse():
-    try:
-        nse_session.get("https://www.nseindia.com", timeout=6)
-        time.sleep(random.uniform(1, 2))
+    try: nse_session.get("https://www.nseindia.com", timeout=6)
     except: pass
 
 # ==========================================
@@ -107,13 +105,7 @@ def _send_msg_raw(chat_id, text, reply_markup=None):
         ], "resize_keyboard": True
     }
     
-    payload = {
-        "chat_id": chat_id, 
-        "text": text, 
-        "parse_mode": "Markdown", 
-        "disable_web_page_preview": True,
-        "reply_markup": reply_markup if reply_markup else default_keyboard
-    }
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True, "reply_markup": reply_markup if reply_markup else default_keyboard}
     
     for _ in range(3):
         try: 
@@ -131,9 +123,7 @@ def telegram_worker():
         except: time.sleep(2)
 
 Thread(target=telegram_worker, daemon=True).start()
-
-def send_msg(chat_id, text, reply_markup=None):
-    msg_queue.put((chat_id, text, reply_markup))
+def send_msg(chat_id, text, reply_markup=None): msg_queue.put((chat_id, text, reply_markup))
 
 # ==========================================
 # 🌐 3. DASHBOARD API & COMMAND CENTER
@@ -147,7 +137,7 @@ def auth():
     if key != WEB_SECRET: return "Unauthorized Access. System Locked.", 401
 
 HTML_TEMPLATE = """
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V28.1 God Mode</h1><p class="text-xs text-slate-400">Shoonya + Approve/Reject Mode</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div><h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2><div class="grid grid-cols-2 gap-2 mb-6"><button onclick="sendCommand('📊 Check Status')" class="bg-blue-600/20 text-blue-400 border border-blue-600/50 p-2 rounded text-sm font-bold hover:bg-blue-600/40">📊 Status</button><button onclick="sendCommand('📈 Live PnL')" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/50 p-2 rounded text-sm font-bold hover:bg-emerald-600/40">📈 Live PnL</button><button onclick="sendCommand('/backtest')" class="bg-purple-600/20 text-purple-400 border border-purple-600/50 p-2 rounded text-sm font-bold hover:bg-purple-600/40">⚙️ Backtest</button><button onclick="sendCommand('🎛️ Active Markets')" class="bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 p-2 rounded text-sm font-bold hover:bg-indigo-600/40">🎛️ Markets</button><button onclick="sendCommand('🛡️ Safe Mode')" class="bg-sky-600/20 text-sky-400 border border-sky-600/50 p-2 rounded text-sm font-bold hover:bg-sky-600/40">🛡️ Safe</button><button onclick="sendCommand('⚡ Aggressive Mode')" class="bg-orange-600/20 text-orange-400 border border-orange-600/50 p-2 rounded text-sm font-bold hover:bg-orange-600/40">⚡ Aggr</button><button onclick="sendCommand('⏸ Pause Bot')" class="bg-amber-600/20 text-amber-400 border border-amber-600/50 p-2 rounded text-sm font-bold hover:bg-amber-600/40">⏸ Pause</button><button onclick="sendCommand('▶️ Resume Bot')" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/50 p-2 rounded text-sm font-bold hover:bg-emerald-600/40">▶️ Resume</button><button onclick="sendCommand('❌ Close All')" class="bg-rose-600/20 text-rose-400 border border-rose-600/50 p-2 rounded text-sm font-bold hover:bg-rose-600/40 col-span-2">❌ Close All Positions</button></div><h2 class="text-lg font-bold text-slate-300 mb-3">⚡ Live Open Trades</h2><div id="open-trades-container" class="space-y-3"><div class="text-center text-slate-500 text-sm py-4">Loading trades...</div></div></div><script>const urlParams = new URLSearchParams(window.location.search); const authKey = urlParams.get('key') || ''; let equityChartInstance = null; async function fetchEquityData() { try { const res = await fetch('/api/equity?key=' + authKey); const rawData = await res.json(); let labels = ["Start"]; let capital = 50000; let dataPoints = [capital]; rawData.forEach(trade => { capital += trade.pnl; labels.push(trade.date.split(" ")[0]); dataPoints.push(capital); }); const ctx = document.getElementById('equityChart').getContext('2d'); if(equityChartInstance) { equityChartInstance.data.labels = labels; equityChartInstance.data.datasets[0].data = dataPoints; equityChartInstance.update(); } else { equityChartInstance = new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: 'Capital (₹)', data: dataPoints, borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 1, pointBackgroundColor: '#fff' }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255, 255, 255, 0.05)' } } } } }); } } catch(e) {} } async function fetchStats() { try { const res = await fetch('/api/stats?key=' + authKey); const data = await res.json(); document.getElementById('total-pnl').innerText = '₹' + data.pnl.toFixed(2); document.getElementById('total-pnl').className = data.pnl >= 0 ? 'text-xl font-bold text-emerald-400' : 'text-xl font-bold text-rose-400'; document.getElementById('win-rate').innerText = data.win_rate.toFixed(1) + '%'; document.getElementById('total-trades').innerText = data.total_trades; document.getElementById('dynamic-cap').innerText = '₹' + (50000 + data.pnl).toLocaleString(); const badge = document.getElementById('status-badge'); if (data.paused) { badge.innerText = '⏸ PAUSED'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/50'; } else { badge.innerText = '● ACTIVE'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'; } const tradesContainer = document.getElementById('open-trades-container'); if (data.open_trades.length === 0) { tradesContainer.innerHTML = '<div class="glass-card p-4 rounded-xl text-center text-slate-500 text-sm">No open trades right now.</div>'; } else { let html = ''; data.open_trades.forEach(t => { const typeColor = t[1].includes('BUY') ? 'text-emerald-400' : 'text-rose-400'; const partialTag = t[5] ? '<span class="ml-2 text-[10px] bg-blue-500/20 text-blue-400 px-1 rounded">50% BOOKED</span>' : ''; html += `<div class="glass-card p-4 rounded-xl flex justify-between items-center"><div><p class="font-bold text-white text-sm">${t[0]} ${partialTag}</p><p class="text-[10px] text-slate-400">Entry: ₹${t[2].toFixed(2)}</p></div><div class="text-right"><p class="font-bold text-sm ${typeColor}">${t[1]}</p><p class="text-[10px] text-slate-400">Qty: ${t[6]}</p></div></div>`; }); tradesContainer.innerHTML = html; } } catch (e) {} } async function sendCommand(cmd) { try { const res = await fetch('/api/command', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd, secret: authKey})}); const data = await res.json(); fetchStats(); } catch(e) {} } fetchStats(); fetchEquityData(); setInterval(fetchStats, 5000); setInterval(fetchEquityData, 10000); </script></body></html>
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AI Quant Dashboard</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><style>body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; } .glass-card { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }</style></head><body class="p-4 sm:p-6"><div class="max-w-md mx-auto"><div class="flex justify-between items-center mb-6"><div><h1 class="text-2xl font-bold text-emerald-400">V28.3 God Mode</h1><p class="text-xs text-slate-400">Anti-Ban + Shoonya</p></div><div id="status-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50">● ACTIVE</div></div><div class="grid grid-cols-2 gap-4 mb-6"><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total PnL</p><p id="total-pnl" class="text-xl font-bold text-white">₹0.00</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Win Rate</p><p id="win-rate" class="text-xl font-bold text-blue-400">0%</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Total Trades</p><p id="total-trades" class="text-xl font-bold text-white">0</p></div><div class="glass-card p-4 rounded-xl text-center"><p class="text-xs text-slate-400 mb-1">Dynamic Capital</p><p id="dynamic-cap" class="text-xl font-bold text-purple-400">₹50K</p></div></div><h2 class="text-lg font-bold text-slate-300 mb-3">📈 Equity Curve</h2><div class="glass-card p-4 rounded-xl mb-6"><canvas id="equityChart" height="200"></canvas></div><h2 class="text-lg font-bold text-slate-300 mb-3 mt-6">🎛️ Command Center</h2><div class="grid grid-cols-2 gap-2 mb-6"><button onclick="sendCommand('📊 Check Status')" class="bg-blue-600/20 text-blue-400 border border-blue-600/50 p-2 rounded text-sm font-bold hover:bg-blue-600/40">📊 Status</button><button onclick="sendCommand('📈 Live PnL')" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/50 p-2 rounded text-sm font-bold hover:bg-emerald-600/40">📈 Live PnL</button><button onclick="sendCommand('/backtest')" class="bg-purple-600/20 text-purple-400 border border-purple-600/50 p-2 rounded text-sm font-bold hover:bg-purple-600/40">⚙️ Backtest</button><button onclick="sendCommand('🎛️ Active Markets')" class="bg-indigo-600/20 text-indigo-400 border border-indigo-600/50 p-2 rounded text-sm font-bold hover:bg-indigo-600/40">🎛️ Markets</button><button onclick="sendCommand('🛡️ Safe Mode')" class="bg-sky-600/20 text-sky-400 border border-sky-600/50 p-2 rounded text-sm font-bold hover:bg-sky-600/40">🛡️ Safe</button><button onclick="sendCommand('⚡ Aggressive Mode')" class="bg-orange-600/20 text-orange-400 border border-orange-600/50 p-2 rounded text-sm font-bold hover:bg-orange-600/40">⚡ Aggr</button><button onclick="sendCommand('⏸ Pause Bot')" class="bg-amber-600/20 text-amber-400 border border-amber-600/50 p-2 rounded text-sm font-bold hover:bg-amber-600/40">⏸ Pause</button><button onclick="sendCommand('▶️ Resume Bot')" class="bg-emerald-600/20 text-emerald-400 border border-emerald-600/50 p-2 rounded text-sm font-bold hover:bg-emerald-600/40">▶️ Resume</button><button onclick="sendCommand('❌ Close All')" class="bg-rose-600/20 text-rose-400 border border-rose-600/50 p-2 rounded text-sm font-bold hover:bg-rose-600/40 col-span-2">❌ Close All Positions</button></div><h2 class="text-lg font-bold text-slate-300 mb-3">⚡ Live Open Trades</h2><div id="open-trades-container" class="space-y-3"><div class="text-center text-slate-500 text-sm py-4">Loading trades...</div></div></div><script>const urlParams = new URLSearchParams(window.location.search); const authKey = urlParams.get('key') || ''; let equityChartInstance = null; async function fetchEquityData() { try { const res = await fetch('/api/equity?key=' + authKey); const rawData = await res.json(); let labels = ["Start"]; let capital = 50000; let dataPoints = [capital]; rawData.forEach(trade => { capital += trade.pnl; labels.push(trade.date.split(" ")[0]); dataPoints.push(capital); }); const ctx = document.getElementById('equityChart').getContext('2d'); if(equityChartInstance) { equityChartInstance.data.labels = labels; equityChartInstance.data.datasets[0].data = dataPoints; equityChartInstance.update(); } else { equityChartInstance = new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: 'Capital (₹)', data: dataPoints, borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 1, pointBackgroundColor: '#fff' }] }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255, 255, 255, 0.05)' } } } } }); } } catch(e) {} } async function fetchStats() { try { const res = await fetch('/api/stats?key=' + authKey); const data = await res.json(); document.getElementById('total-pnl').innerText = '₹' + data.pnl.toFixed(2); document.getElementById('total-pnl').className = data.pnl >= 0 ? 'text-xl font-bold text-emerald-400' : 'text-xl font-bold text-rose-400'; document.getElementById('win-rate').innerText = data.win_rate.toFixed(1) + '%'; document.getElementById('total-trades').innerText = data.total_trades; document.getElementById('dynamic-cap').innerText = '₹' + (50000 + data.pnl).toLocaleString(); const badge = document.getElementById('status-badge'); if (data.paused) { badge.innerText = '⏸ PAUSED'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/50'; } else { badge.innerText = '● ACTIVE'; badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'; } const tradesContainer = document.getElementById('open-trades-container'); if (data.open_trades.length === 0) { tradesContainer.innerHTML = '<div class="glass-card p-4 rounded-xl text-center text-slate-500 text-sm">No open trades right now.</div>'; } else { let html = ''; data.open_trades.forEach(t => { const typeColor = t[1].includes('BUY') ? 'text-emerald-400' : 'text-rose-400'; const partialTag = t[5] ? '<span class="ml-2 text-[10px] bg-blue-500/20 text-blue-400 px-1 rounded">50% BOOKED</span>' : ''; html += `<div class="glass-card p-4 rounded-xl flex justify-between items-center"><div><p class="font-bold text-white text-sm">${t[0]} ${partialTag}</p><p class="text-[10px] text-slate-400">Entry: ₹${t[2].toFixed(2)}</p></div><div class="text-right"><p class="font-bold text-sm ${typeColor}">${t[1]}</p><p class="text-[10px] text-slate-400">Qty: ${t[6]}</p></div></div>`; }); tradesContainer.innerHTML = html; } } catch (e) {} } async function sendCommand(cmd) { try { const res = await fetch('/api/command', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd, secret: authKey})}); const data = await res.json(); fetchStats(); } catch(e) {} } fetchStats(); fetchEquityData(); setInterval(fetchStats, 5000); setInterval(fetchEquityData, 10000); </script></body></html>
 """
 
 @app.route('/')
@@ -263,7 +253,8 @@ def get_vix_multiplier():
     global last_vix, last_vix_time
     if time.time() - last_vix_time < 300: return last_vix
     try:
-        vix_data = yf.download('^INDIAVIX', period='5d', interval='1d', progress=False)
+        # 🔥 FIX: Added session here too
+        vix_data = yf.download('^INDIAVIX', period='5d', interval='1d', progress=False, session=yf_session)
         if vix_data is not None and not vix_data.empty:
             v = vix_data['Close'].iloc[:, 0] if isinstance(vix_data.columns, pd.MultiIndex) else vix_data['Close']
             vix = v.iloc[-1]
@@ -289,16 +280,7 @@ def is_news_time():
     if now.minute in [29, 59]: return True 
     return False 
 
-def get_sentiment(sym):
-    try:
-        api_key = os.getenv("FINNHUB_API_KEY")
-        if not api_key: return 0 
-        res = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={sym}&token={api_key}", timeout=5).json()
-        news_score = res.get('companyNewsScore', 0.5)
-        bullish = res.get('sentiment', {}).get('bullishPercent', 0.5) if isinstance(res.get('sentiment'), dict) else 0.5
-        score = (news_score * 2 - 1) + (bullish * 2 - 1)
-        return 1 if score > 0.2 else (-1 if score < -0.2 else 0)
-    except: return 0
+def get_sentiment(sym): return 0
 
 # ==========================================
 # 🏦 6. REAL BROKER (SHOONYA)
@@ -358,21 +340,26 @@ def process_single_symbol(sym, manual=False):
     global strategy_mode, alerts_muted, current_risk_percent, bot_paused, trading_mode, pending_trades
     
     if bot_paused: return f"⏸ {sym}: Paused" if manual else None
+    if is_news_time(): return f"📰 {sym}: News Time Block" if manual else None
+    
     with data_lock:
         if sym in last_trade_time and time.time() - last_trade_time[sym] < trade_cooldown_seconds: return f"⏳ {sym}: Cooldown" if manual else None
     
-    time.sleep(random.uniform(1.0, 3.0))
     yf_sym = yf_symbol_map.get(sym, sym)
     try:
-        d1 = yf.download(yf_sym, period='2d', interval='1m', progress=False)
-        d5 = yf.download(yf_sym, period='5d', interval='5m', progress=False)
-        d15 = yf.download(yf_sym, period='5d', interval='15m', progress=False)
-        if d5.empty or d15.empty: return f"❌ {sym}: YF Empty" if manual else None
+        # 🔥 FIX 2: Applied yf_session to all downloads to bypass Block!
+        d1 = yf.download(yf_sym, period='2d', interval='1m', progress=False, session=yf_session)
+        time.sleep(0.5) # Extra anti-ban safety
+        d5 = yf.download(yf_sym, period='5d', interval='5m', progress=False, session=yf_session)
+        time.sleep(0.5)
+        d15 = yf.download(yf_sym, period='5d', interval='15m', progress=False, session=yf_session)
+        
+        if d1.empty or d5.empty or d15.empty: return f"❌ {sym}: YF Data Empty" if manual else None
         
         data_1m = pd.DataFrame({'close': get_yf_col(d1, 'Close')})
         data_5m = pd.DataFrame({'close': get_yf_col(d5, 'Close'), 'high': get_yf_col(d5, 'High'), 'low': get_yf_col(d5, 'Low'), 'volume': get_yf_col(d5, 'Volume')})
         data_15m = pd.DataFrame({'close': get_yf_col(d15, 'Close')})
-    except: return f"❌ {sym}: YF API Error" if manual else None
+    except Exception as e: return f"❌ {sym}: YF API Error ({str(e)[:15]})" if manual else None
 
     if len(data_5m) < 20 or len(data_15m) < 20: return f"❌ {sym}: Not enough data" if manual else None
     
@@ -508,7 +495,7 @@ def process_single_symbol(sym, manual=False):
     pending_trades[trade_id] = {"sym": sym, "final_decision": final_decision, "exec_price": exec_price, "sl": sl, "tp": tp, "qty": qty, "features_str": f"RSI:{rsi:.1f},MACD:{macd.iloc[-1]:.2f},DIST:{dist_ema:.1f},PCR:{pcr:.2f},VIX:{vix_multi:.2f},SMC:{smc_score}"}
     
     inline_kb = {"inline_keyboard": [[{"text": "✅ Haan, Trade Le Lo", "callback_data": f"YES_{trade_id}"}], [{"text": "❌ Nahi, Reject Karo", "callback_data": f"NO_{trade_id}"}]]}
-    send_msg(AUTHORIZED_USER, f"🚀 *TRADE SETUP FOUND* 🚀\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {final_decision}\n🛒 *Qty:* {qty} (Risk {adj_risk:.1f}%)\n🧠 *XGB Edge:* {ml_prob:.1f}%\n\n🔸 *Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr:.1f}\n\n👉 Trade Lena Hai?", inline_kb)
+    send_msg(AUTHORIZED_USER, f"🚀 *TRADE SETUP FOUND* 🚀\n\n📈 *Symbol:* {sym}\n🤖 *Action:* {final_decision}\n🛒 *Qty:* {qty} (Risk {adj_risk:.1f}%)\n🧠 *XGB Edge:* {ml_prob if ml_prob else 0:.1f}%\n\n🔸 *Entry:* ₹{exec_price:.2f}\n🎯 *TP:* ₹{tp:.2f} | 🛡️ *SL:* ₹{sl:.2f}\n⚖️ *RR:* 1:{rr:.1f}\n\n👉 Trade Lena Hai?", inline_kb)
 
     return f"✅ {sym}: Waiting for Approval." if manual else None
 
@@ -529,7 +516,7 @@ def run_scan_cycle(manual=False):
     results = []
     for s in active_symbols:
         results.append(process_single_symbol(s, manual))
-        time.sleep(1) 
+        time.sleep(1.5) # 🔥 Anti-ban pacing
         
     if manual:
         valid_results = [r for r in results if r]
@@ -581,7 +568,7 @@ def process_command(chat_id, txt, cb_query_id=None):
         except: pass
         return
 
-    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V28.1 The Ultimate God Mode Engine Online.")
+    if txt == "/start": send_msg(chat_id, "👋 Hello boss I am ready! V28.3 The Anti-Ban Engine Online.")
     elif txt == "🎛️ Active Markets": send_msg(chat_id, f"🎛️ *Active Markets:* {', '.join(active_symbols)}")
     elif txt in ["/backtest", "⚙️ Backtest"]:
         rows = execute_db("SELECT pnl FROM pro_trades WHERE status!='OPEN' ORDER BY date_ts ASC", fetchall=True)
@@ -606,13 +593,10 @@ def process_command(chat_id, txt, cb_query_id=None):
     elif txt == "CONFIRM REAL": trading_mode = "REAL"; send_msg(chat_id, "💰 *REAL ENABLED!*")
     elif txt == "CONFIRM DEMO": trading_mode = "DEMO"; send_msg(chat_id, "🛡️ *DEMO Mode.*")
     elif txt == "📊 Check Status": send_msg(chat_id, f"📡 Bot: {'Paused ⏸' if bot_paused else 'Active ▶️'}\n🧠 Mode: {trading_mode}\n🛡️ Strategy: {strategy_mode}\n📊 Max Trades: {max_daily_trades}/day")
-    
-    # 🛠️ FIX: Fixed the f-string backslash error here!
     elif txt in ["💰 View PnL", "/pnl"]: 
         query = "SELECT SUM(pnl) FROM pro_trades WHERE status!='OPEN'"
         pnl_amt = get_val(query)
         send_msg(chat_id, f"💰 Net PnL: ₹{pnl_amt:.2f}")
-        
     elif txt == "📈 Live PnL":
         rows = execute_db("SELECT symbol, type, entry_price, qty FROM pro_trades WHERE status='OPEN'", fetchall=True)
         if not rows: send_msg(chat_id, "No open trades.")
@@ -620,7 +604,7 @@ def process_command(chat_id, txt, cb_query_id=None):
             msg, tl = "📈 *LIVE OPEN TRADES:*\n\n", 0
             for sym, t_type, entry, qty in rows:
                 try:
-                    cp = yf.download(yf_symbol_map.get(sym, sym), period='1d', interval='1m', progress=False)['Close'].iloc[-1]
+                    cp = yf.download(yf_symbol_map.get(sym, sym), period='1d', interval='1m', progress=False, session=yf_session)['Close'].iloc[-1]
                     pnl = ((cp - entry) if "BUY" in t_type else (entry - cp)) * qty
                     tl += pnl; msg += f"🔹 {sym}: ₹{pnl:.2f}\n"
                 except: pass
